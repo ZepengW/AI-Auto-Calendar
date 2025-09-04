@@ -111,6 +111,97 @@ function buildOriginFromUrl(raw){
   try { const u = new URL(raw); return `${u.protocol}//${u.hostname}${u.port?':'+u.port:''}/*`; } catch(_){ return null; }
 }
 
+// -----------------------------
+// ICS Merge Support (for non-incremental servers)
+// -----------------------------
+function parseICSTime(val){
+  if(!val) return null;
+  // Expect format like 20240905T120000Z or with timezone omitted; we treat as UTC if Z else naive
+  const m = String(val).trim().match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z?$/);
+  if(!m) return null;
+  const [_, y, mon, d, H, M, S] = m; // eslint-disable-line no-unused-vars
+  return new Date(Date.UTC(Number(y), Number(mon)-1, Number(d), Number(H), Number(M), Number(S)));
+}
+
+function parseExistingICS(text){
+  const events = [];
+  if(!text) return events;
+  const lines = text.split(/\r?\n/);
+  let cur = null;
+  for(const raw of lines){
+    const line = raw.trim();
+    if(line === 'BEGIN:VEVENT'){ cur = { rawProps:{} }; }
+    else if(line === 'END:VEVENT'){ if(cur){ events.push(cur); cur=null; } }
+    else if(cur){
+      const idx = line.indexOf(':');
+      if(idx>0){
+        const keyPart = line.slice(0, idx); // may contain ;VALUE= etc.
+        const value = line.slice(idx+1);
+        const key = keyPart.split(';')[0].toUpperCase();
+        cur.rawProps[key] = value;
+        if(key === 'UID') cur.uid = value;
+        if(key === 'SUMMARY') cur.title = value;
+        if(key === 'DTSTART') cur.startTime = parseICSTime(value.replace(/Z$/, ''));
+        if(key === 'DTEND') cur.endTime = parseICSTime(value.replace(/Z$/, ''));
+        if(key === 'LOCATION') cur.location = value;
+        if(key === 'DESCRIPTION') cur.description = value;
+      }
+    }
+  }
+  return events;
+}
+
+function normalizeForMerge(ev){
+  // Build a signature for conflict detection (title + start + end + location)
+  const s = ev.startTime instanceof Date ? ev.startTime.toISOString() : (ev.startTime?.toISOString?.()||'');
+  const e = ev.endTime instanceof Date ? ev.endTime.toISOString() : (ev.endTime?.toISOString?.()||'');
+  return `${(ev.title||'').trim()}|${s}|${e}|${(ev.location||'').trim()}`.toLowerCase();
+}
+
+function mergeEvents(existing, incoming){
+  const map = new Map();
+  // keep existing first
+  for(const ev of existing){
+    map.set(normalizeForMerge(ev), ev);
+  }
+  for(const ev of incoming){
+    const sig = normalizeForMerge(ev);
+    if(map.has(sig)){
+      // If collisions, prefer incoming (assume fresher) but preserve UID if existing had
+      const old = map.get(sig);
+      const merged = { ...old, ...ev };
+      if(old.uid && !merged.uid) merged.uid = old.uid;
+      map.set(sig, merged);
+    } else {
+      map.set(sig, ev);
+    }
+  }
+  return [...map.values()];
+}
+
+async function mergeUpload(calendarName, newEvents){
+  const settings = await loadSettings();
+  const base = (settings.radicalBase || DEFAULTS.radicalBase).replace(/\/$/, '');
+  const user = settings.radicalUsername || DEFAULTS.radicalUsername;
+  const auth = settings.radicalAuth || '';
+  const url = `${base}/${encodeURIComponent(user)}/${encodeURIComponent(calendarName)}.ics`;
+  const headers = {};
+  if (auth) headers['Authorization'] = auth;
+  let existingText = '';
+  try {
+    const res = await fetch(url, { method: 'GET', headers });
+    if(res.ok) existingText = await res.text();
+  } catch(e) {
+    // ignore fetch failure; treat as empty
+  }
+  const existingParsed = parseExistingICS(existingText);
+  const merged = mergeEvents(existingParsed, newEvents);
+  const ics = buildICS(merged, calendarName);
+  await uploadToRadicale(ics, calendarName, settings);
+  notifyAll(`合并上传 ${newEvents.length} 条，最终总计 ${merged.length} 条 (${calendarName})`);
+  return { total: merged.length, added: newEvents.length };
+}
+
 // Core sync sequence
 async function runSync() {
   const settings = await loadSettings();
@@ -276,10 +367,9 @@ async function parseLLMAndUpload(rawText) {
     startTime: parseLLMTime(ev.startTime),
     endTime: parseLLMTime(ev.endTime),
   }));
-  const ics = buildICS(events, 'LLM-Parsed');
-  await uploadToRadicale(ics, 'LLM-Parsed', settings);
-  notifyAll(`成功解析并上传 ${events.length} 个事件`);
-  return { count: events.length };
+  // 增量合并上传
+  const mergedInfo = await mergeUpload('LLM-Parsed', events);
+  return { count: events.length, total: mergedInfo.total };
 }
 
 async function parseLLMOnly(rawText) {
@@ -347,9 +437,8 @@ async function uploadEventsList(events) {
     if (!ev.title || !ev.startTime || !ev.endTime) dropped.push(ev); else valid.push(ev);
   }
   if (!valid.length) throw new Error('全部事件缺少字段或时间格式无法解析');
-  const ics = buildICS(norm, 'LLM-Parsed');
-  await uploadToRadicale(ics, 'LLM-Parsed', settings);
-  if (dropped.length) notifyAll(`上传 ${valid.length} 条事件，丢弃 ${dropped.length} 条字段不完整事件`);
-  else notifyAll(`上传 ${valid.length} 条事件至 LLM-Parsed`);
+  const mergedInfo = await mergeUpload('LLM-Parsed', valid);
+  if (dropped.length) notifyAll(`合并上传 ${valid.length} 条，丢弃 ${dropped.length} 条；当前日历共 ${mergedInfo.total} 条`);
+  else notifyAll(`合并上传 ${valid.length} 条；当前日历共 ${mergedInfo.total} 条`);
   return valid.length;
 }
