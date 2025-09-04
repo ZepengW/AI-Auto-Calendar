@@ -111,6 +111,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'SJTU_CAL_TOAST') {
     showToast(msg.text);
   }
+  if (msg?.type === 'SJTU_CAL_CAPTURE_TEXT') {
+    try {
+      const bodyText = document.body ? document.body.innerText.slice(0, 200000) : '';
+      sendResponse({ ok: true, text: bodyText });
+    } catch(e){
+      sendResponse({ ok:false, error: e.message });
+    }
+  }
 });
 
 // Keyboard shortcut: Ctrl/Cmd + Shift + P (fallback if commands not working in content)

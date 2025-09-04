@@ -12,6 +12,12 @@ const els = {
   lastSync: null,
   saveBtn: null,
   syncNow: null,
+  pageParseUrl: null,
+  pageParseInterval: null,
+  pageParseCalendarName: null,
+  pageParseEnabled: null,
+  pageParseRun: null,
+  pageParseStatus: null,
 };
 
 function qs(id){ return document.getElementById(id); }
@@ -44,6 +50,16 @@ async function init(){
   els.lastSync = qs('lastSync');
   els.saveBtn = qs('save');
   els.syncNow = qs('syncNow');
+  els.pageParseUrl = qs('pageParseUrl');
+  els.pageParseInterval = qs('pageParseInterval');
+  els.pageParseCalendarName = qs('pageParseCalendarName');
+  els.pageParseEnabled = qs('pageParseEnabled');
+  els.pageParseRun = qs('pageParseRun');
+  els.pageParseStatus = qs('pageParseStatus');
+  els.pageParseStrategy = qs('pageParseStrategy');
+  els.pageParseJsonPaths = qs('pageParseJsonPaths');
+  els.jsonExtractPanel = qs('jsonExtractPanel');
+  els.pageParseJsonModeRadios = Array.from(document.querySelectorAll('input[name="pageParseJsonMode"]'));
 
   const cfg = await loadSettings();
   const mapping = {
@@ -54,6 +70,13 @@ async function init(){
     dateWindowDays: 'dateWindowDays',
     enableNotifications: 'enableNotifications',
     llmProvider: 'llmProvider',
+    pageParseUrl: 'pageParseUrl',
+    pageParseInterval: 'pageParseInterval',
+    pageParseCalendarName: 'pageParseCalendarName',
+    pageParseEnabled: 'pageParseEnabled',
+    pageParseStrategy: 'pageParseStrategy',
+    pageParseJsonPaths: 'pageParseJsonPaths',
+    pageParseJsonMode: 'pageParseJsonMode',
   };
   Object.entries(mapping).forEach(([k, id]) => {
     const el = els[id];
@@ -62,12 +85,29 @@ async function init(){
     else if(k === 'llmProvider') el.value = cfg.llmProvider || 'zhipu_agent';
     else el.value = cfg[k] ?? DEFAULTS[k];
   });
+  if(els.pageParseEnabled) els.pageParseEnabled.value = cfg.pageParseEnabled ? 'true':'false';
   if(els.lastSync) els.lastSync.textContent = cfg.lastSync ? new Date(cfg.lastSync).toLocaleString() : 'n/a';
+  if(els.pageParseStrategy) els.pageParseStrategy.value = cfg.pageParseStrategy || 'fetch';
+  if(els.pageParseJsonPaths) els.pageParseJsonPaths.value = cfg.pageParseJsonPaths || DEFAULTS.pageParseJsonPaths;
+  if(els.pageParseJsonModeRadios){
+    const mode = cfg.pageParseJsonMode || DEFAULTS.pageParseJsonMode || 'llm';
+    els.pageParseJsonModeRadios.forEach(r => r.checked = (r.value === mode));
+  }
+  updateJsonPanelVisibility();
   fillProvider(cfg);
 
   els.llmProvider?.addEventListener('change', () => fillProvider({ llmProvider: els.llmProvider.value }));
   els.saveBtn?.addEventListener('click', saveAll);
   els.syncNow?.addEventListener('click', () => chrome.runtime.sendMessage({ type: 'SYNC_NOW' }));
+  els.pageParseRun?.addEventListener('click', runPageParseNow);
+  els.pageParseStrategy?.addEventListener('change', updateJsonPanelVisibility);
+  els.pageParseJsonModeRadios?.forEach(r => r.addEventListener('change', ()=>{}));
+}
+
+function updateJsonPanelVisibility(){
+  if(!els.jsonExtractPanel) return;
+  const strat = els.pageParseStrategy?.value || 'fetch';
+  els.jsonExtractPanel.style.display = strat === 'fetch' ? 'block':'none';
 }
 
 async function saveAll(){
@@ -80,6 +120,13 @@ async function saveAll(){
       dateWindowDays: Number(els.dateWindowDays.value) || DEFAULTS.dateWindowDays,
       enableNotifications: els.enableNotifications.value === 'true',
       llmProvider: els.llmProvider.value,
+      pageParseUrl: (els.pageParseUrl?.value || '').trim(),
+      pageParseInterval: Number(els.pageParseInterval?.value) || 0,
+      pageParseCalendarName: (els.pageParseCalendarName?.value || '').trim(),
+      pageParseEnabled: els.pageParseEnabled?.value === 'true',
+      pageParseStrategy: els.pageParseStrategy?.value || 'fetch',
+      pageParseJsonPaths: (els.pageParseJsonPaths?.value || '').trim(),
+      pageParseJsonMode: (els.pageParseJsonModeRadios?.find(r=>r.checked)?.value) || 'llm',
     };
     if(patch.llmProvider === 'zhipu_agent'){
       patch.llmAgentId = (qs('llmAgentId')?.value || '').trim();
@@ -116,6 +163,20 @@ async function requestOriginPermission(pattern){
       chrome.permissions.request({ origins:[pattern] }, (granted)=>{ resolve(granted); });
     });
   });
+}
+
+async function runPageParseNow(){
+  const url = (els.pageParseUrl?.value || '').trim();
+  if(!url){ alert('未配置目标页面 URL'); return; }
+  const calendarName = (els.pageParseCalendarName?.value || '').trim() || 'PAGE-PARSED';
+  els.pageParseStatus.textContent = '触发中…';
+  try {
+    const resp = await chrome.runtime.sendMessage({ type:'PAGE_PARSE_RUN_ONCE', url, calendarName });
+    if(!resp?.ok) throw new Error(resp?.error || '后台失败');
+    els.pageParseStatus.textContent = `已触发：新增 ${resp.added||resp.count||0}`;
+  } catch(e){
+    els.pageParseStatus.textContent = '失败：'+ e.message;
+  }
 }
 
 document.addEventListener('DOMContentLoaded', init);

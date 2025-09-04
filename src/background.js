@@ -260,12 +260,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true;
   }
+  if (msg?.type === 'PAGE_PARSE_RUN_ONCE') {
+    runPageParseOnce(msg.url, msg.calendarName)
+      .then((r) => sendResponse({ ok: true, ...r }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
   return undefined;
 });
 
 // Alarm trigger
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === 'AUTO_SYNC') runSync();
+  if (a.name === 'PAGE_PARSE_AUTO') runPageParseScheduled();
 });
 
 // Ensure alarm exists
@@ -278,9 +285,11 @@ async function ensureAlarm() {
 chrome.runtime.onInstalled.addListener(() => {
   ensureAlarm();
   createMenus();
+  ensurePageParseAlarm();
 });
 chrome.runtime.onStartup.addListener(() => {
   ensureAlarm();
+  ensurePageParseAlarm();
 });
 chrome.commands?.onCommand.addListener((command) => {
   if (command === 'parse-selection') {
@@ -441,4 +450,333 @@ async function uploadEventsList(events) {
   if (dropped.length) notifyAll(`合并上传 ${valid.length} 条，丢弃 ${dropped.length} 条；当前日历共 ${mergedInfo.total} 条`);
   else notifyAll(`合并上传 ${valid.length} 条；当前日历共 ${mergedInfo.total} 条`);
   return valid.length;
+}
+
+// -----------------------------
+// Page Parse (Scheduled / Manual)
+// -----------------------------
+async function ensurePageParseAlarm(){
+  const settings = await loadSettings();
+  if(!settings.pageParseEnabled){ chrome.alarms.clear('PAGE_PARSE_AUTO'); return; }
+  const iv = Math.max(1, Number(settings.pageParseInterval) || 0);
+  if(!iv || !settings.pageParseUrl){ chrome.alarms.clear('PAGE_PARSE_AUTO'); return; }
+  chrome.alarms.create('PAGE_PARSE_AUTO', { periodInMinutes: iv });
+}
+
+chrome.storage?.onChanged.addListener((changes) => {
+  if(changes.pageParseEnabled || changes.pageParseInterval || changes.pageParseUrl){
+    ensurePageParseAlarm();
+  }
+});
+
+async function runPageParseScheduled(){
+  const settings = await loadSettings();
+  if(!settings.pageParseEnabled) return;
+  if(!settings.pageParseUrl){ notifyAll('页面解析跳过：未配置 URL'); return; }
+  try {
+    await runPageParseOnce(settings.pageParseUrl, settings.pageParseCalendarName || 'PAGE-PARSED');
+  } catch(e){
+    notifyAll('页面解析失败: ' + e.message);
+  }
+}
+
+async function runPageParseOnce(url, calendarName){
+  const settings = await loadSettings();
+  const strategy = settings.pageParseStrategy || 'fetch'; // fetch | capture
+  let text = '';
+  if(strategy === 'capture') {
+    try {
+      text = await capturePageText(url);
+    } catch(e){
+      notifyAll('页面 capture 失败，回退到直接获取: '+ e.message);
+      text = await fallbackFetchPage(url, console.log, console.warn);
+    }
+  } else {
+    // fetch 模式：直接使用 fallbackFetchPage （无 DOM 执行, 最稳定）
+    text = await fallbackFetchPage(url, console.log, console.warn);
+    // 在 fetch 模式下尝试：若返回似乎是 JSON（或者用户选择 JSON 直取模式），则走 JSON 解析分支
+    const jsonMode = settings.pageParseJsonMode || 'llm';
+    let parsedEvents = null;
+    if(jsonMode === 'json'){
+      // 用户强制 JSON 直取，则先尝试 parse
+      parsedEvents = await tryParseJsonEvents(text, settings);
+    } else if(/^[\s\S]*\{[\s\S]*\}[\s\S]*$/.test(text.trim().slice(0,800))){
+      // 内容看起来像含有 JSON 对象，且用户仍是 llm 模式：可选择仍交给 LLM；此处不自动 JSON 直取
+    }
+    if(parsedEvents){
+      const info = await mergeUpload(calendarName || 'PAGE-PARSED', parsedEvents);
+      notifyAll(`页面(JSON)解析完成: 新增 ${parsedEvents.length} 条（合并后总 ${info.total} 条）`);
+      return { added: parsedEvents.length, total: info.total, json: true };
+    }
+  }
+  const events = await parseTextViaLLM(text);
+  const info = await mergeUpload(calendarName || 'PAGE-PARSED', events);
+  notifyAll(`页面解析完成: 新增 ${events.length} 条（合并后总 ${info.total} 条）`);
+  return { added: events.length, total: info.total };
+}
+
+// -----------------------------
+// JSON 直取工具
+// -----------------------------
+function tokenizeJsonPath(path){
+  // 支持 seg: key, key[index], key[*], [index], [*]
+  // 拆成段：先按 '.' 分，再解析 []
+  const parts = [];
+  const segs = path.split('.').map(s=>s.trim()).filter(Boolean);
+  for(const seg of segs){
+    let rest = seg;
+    // 先匹配纯 key (可能后跟 [..] 多段)
+    const mKey = rest.match(/^([A-Za-z0-9_]+)(.*)$/);
+    if(mKey){
+      parts.push({ type:'key', key:mKey[1] });
+      rest = mKey[2];
+    }
+    // 处理后续 [..] 串
+    while(rest.length){
+      const mIndex = rest.match(/^\[(\d+)\](.*)$/);
+      if(mIndex){ parts.push({ type:'index', index:Number(mIndex[1])}); rest = mIndex[2]; continue; }
+      const mAll = rest.match(/^\[\*\](.*)$/);
+      if(mAll){ parts.push({ type:'wildcard'}); rest = mAll[1]; continue; }
+      // 如果一开始就是 [index] 而无 key 部分
+      const mStartIndex = rest.match(/^\[(\d+)\](.*)$/);
+      if(mStartIndex){ parts.push({ type:'index', index:Number(mStartIndex[1])}); rest = mStartIndex[2]; continue; }
+      break; // 非法剩余，退出
+    }
+    if(!mKey){
+      // seg 形如 [0] 或 [*]
+      if(/^\[(\d+)\]$/.test(seg)){ parts.push({ type:'index', index:Number(RegExp.$1)}); }
+      else if(seg === '[*]'){ parts.push({ type:'wildcard'}); }
+    }
+  }
+  return parts;
+}
+
+function evaluateSinglePath(root, pathSpec){
+  const tokens = tokenizeJsonPath(pathSpec);
+  let current = [root];
+  for(const tk of tokens){
+    const next = [];
+    for(const node of current){
+      if(tk.type === 'key'){
+        if(node && Object.prototype.hasOwnProperty.call(node, tk.key)) next.push(node[tk.key]);
+      } else if(tk.type === 'index'){
+        if(Array.isArray(node) && node.length > tk.index) next.push(node[tk.index]);
+      } else if(tk.type === 'wildcard'){
+        if(Array.isArray(node)) next.push(...node);
+      }
+    }
+    current = next;
+    if(!current.length) break;
+  }
+  return current;
+}
+
+function evaluateJsonPaths(json, paths){
+  const all = [];
+  for(const p of paths){
+    const trimmed = p.trim();
+    if(!trimmed) continue;
+    try {
+      const vals = evaluateSinglePath(json, trimmed);
+      all.push(...vals);
+    } catch(e){
+      console.warn('evaluate path failed', trimmed, e.message);
+    }
+  }
+  return all;
+}
+
+async function tryParseJsonEvents(text, settings){
+  let obj = null;
+  try { obj = JSON.parse(text); } catch { return null; }
+  const rawPaths = (settings.pageParseJsonPaths || '').split(/\n+/);
+  const candidates = evaluateJsonPaths(obj, rawPaths);
+  const events = [];
+  for(const c of candidates){
+    if(!c || typeof c !== 'object') continue;
+    // 如果是数组则展开
+    if(Array.isArray(c)){
+      for(const item of c){ collectEventCandidate(item, events); }
+    } else {
+      collectEventCandidate(c, events);
+    }
+  }
+  const valid = events.filter(e => e.title && e.startTime && e.endTime);
+  return valid.length ? valid : null;
+}
+
+function collectEventCandidate(obj, out){
+  if(!obj || typeof obj !== 'object') return;
+  const title = obj.title || obj.summary || obj.name;
+  const startTime = obj.startTime || obj.begin || obj.start;
+  const endTime = obj.endTime || obj.end || obj.finish;
+  if(!(title && startTime && endTime)) return;
+  out.push({
+    title: String(title),
+    startTime: parseSJTUTime(startTime) || parseLLMTime(startTime) || startTime,
+    endTime: parseSJTUTime(endTime) || parseLLMTime(endTime) || endTime,
+    location: obj.location || obj.place || '',
+    status: obj.status || '',
+    raw: obj,
+  });
+}
+
+async function capturePageText(targetUrl){
+  const tab = await new Promise((resolve) => {
+    chrome.tabs.query({ url: targetUrl }, (tabs) => {
+      if(tabs && tabs.length) return resolve(tabs[0]);
+      chrome.tabs.create({ url: targetUrl, active: false }, (t) => resolve(t));
+    });
+  });
+  if(!tab?.id) throw new Error('无法创建/获取标签');
+  await waitTabComplete(tab.id, 20000);
+  let text = '';
+  const traceId = 'PP-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,6);
+  const started = performance.now?.() || Date.now();
+  const log = (...args) => console.log('[PageParse]', traceId, ...args);
+  const warn = (...args) => console.warn('[PageParse]', traceId, ...args);
+  log('Begin capturePageText', { targetUrl, tabId: tab.id, status: tab.status });
+
+  const sendCapture = (phase) => new Promise((resolve, reject) => {
+    const t0 = performance.now?.() || Date.now();
+    try {
+      chrome.tabs.sendMessage(tab.id, { type:'SJTU_CAL_CAPTURE_TEXT', _trace: traceId, _phase: phase }, (resp) => {
+        const elapsed = (performance.now?.() || Date.now()) - t0;
+        if(chrome.runtime.lastError){
+          warn(phase, 'lastError', chrome.runtime.lastError.message, 'elapsed(ms)=', elapsed);
+          return reject(new Error(chrome.runtime.lastError.message));
+        }
+        if(!resp){
+          warn(phase, 'no response object', 'elapsed(ms)=', elapsed);
+          return reject(new Error('无响应对象'));
+        }
+        if(!resp.ok){
+          warn(phase, 'resp not ok', resp.error, 'elapsed(ms)=', elapsed);
+          return reject(new Error(resp.error || '采集失败'));
+        }
+        log(phase, 'success length=', (resp.text||'').length, 'elapsed(ms)=', elapsed);
+        resolve(resp.text || '');
+      });
+    } catch(e){
+      warn(phase, 'sendMessage threw', e.message);
+      reject(e);
+    }
+  });
+
+  try {
+    text = await sendCapture('first');
+  } catch(e){
+    // 可能 content script 未注入 => 动态注入再试一次
+    if(e.message && e.message.includes('Could not establish connection')){
+      log('Need dynamic inject content script because first attempt failed:', e.message);
+      try {
+        await chrome.scripting.executeScript({ target:{ tabId: tab.id }, files:['src/content.js'] });
+        log('Dynamic inject done, retrying');
+        text = await sendCapture('retry');
+      } catch(e2){
+        warn('retry failed', e2.message, 'attempting frame enumeration');
+        // 多 frame 注入再试一次
+        try {
+          const frames = await new Promise((resolve) => {
+            try { chrome.webNavigation.getAllFrames({ tabId: tab.id }, resolve); } catch(_){ resolve([]); }
+          });
+          if(Array.isArray(frames) && frames.length){
+            log('Enumerated frames count=', frames.length);
+            for(const f of frames){
+              try {
+                await chrome.scripting.executeScript({ target:{ tabId: tab.id, frameIds:[f.frameId] }, files:['src/content.js'] });
+              } catch(frameErr){ warn('inject frame failed', f.frameId, frameErr.message); }
+            }
+            try {
+              text = await sendCapture('retry-frames');
+            } catch(e3){
+              warn('retry-frames failed', e3.message, 'fallback to direct fetch');
+              text = await fallbackFetchPage(targetUrl, log, warn);
+            }
+          } else {
+            warn('no frames enumerated, fallback to direct fetch');
+            text = await fallbackFetchPage(targetUrl, log, warn);
+          }
+        } catch(enumErr){
+          warn('frame enumeration failed', enumErr.message, 'fallback to direct fetch');
+          text = await fallbackFetchPage(targetUrl, log, warn);
+        }
+      }
+    } else {
+      warn('first attempt failed (non-inject reason)', e.message);
+      throw e;
+    }
+  }
+  const totalElapsed = (performance.now?.() || Date.now()) - started;
+  log('Finished capturePageText, final length=', text.length, 'totalElapsed(ms)=', totalElapsed);
+  return text;
+}
+
+function waitTabComplete(tabId, timeoutMs){
+  const start = Date.now();
+  return new Promise((resolve, reject) => {
+    const timer = setInterval(() => {
+      if(Date.now() - start > timeoutMs){ clearInterval(timer); reject(new Error('加载超时')); }
+      chrome.tabs.get(tabId, (t) => {
+        if(!t) return; // closed
+        if(t.status === 'complete'){ clearInterval(timer); resolve(); }
+      });
+    }, 500);
+  });
+}
+
+async function parseTextViaLLM(rawText){
+  const settings = await loadSettings();
+  const key = settings.llmApiKey;
+  if(!key) throw new Error('未配置 LLM API Key');
+  if(settings.llmProvider !== 'zhipu_agent') throw new Error('不支持的 provider');
+  const agentId = settings.llmAgentId; if(!agentId) throw new Error('未配置 Agent ID');
+  const now = new Date();
+  const todayDate = now.toISOString().split('T')[0];
+  const currentTime = now.toTimeString().split(' ')[0];
+  const body = {
+    app_id: agentId,
+    messages: [ { role:'user', content:[ { type:'input', value:`今天的日期是 ${todayDate}，当前时间是 ${currentTime}。\n\n请从以下页面文本中提取日程 (JSON: {"events":[{"title":"","startTime":"YYYY-MM-DD HH:mm","endTime":"YYYY-MM-DD HH:mm","location":""}]}, 不要输出额外解释) ：\n${rawText.slice(0,4000)}` } ] } ],
+    stream:false,
+  };
+  const resp = await fetch(settings.llmApiUrl || DEFAULTS.llmApiUrl, {
+    method:'POST',
+    headers:{ Authorization:'Bearer ' + key, 'Content-Type':'application/json' },
+    body: JSON.stringify(body),
+  });
+  if(!resp.ok) throw new Error('LLM 请求失败 ' + resp.status);
+  const json = await resp.json();
+  const content = json.choices?.[0]?.messages?.content?.msg;
+  if(!content) throw new Error('LLM 返回空内容');
+  let parsed; try { parsed = JSON.parse(content); } catch { throw new Error('解析 LLM JSON 失败'); }
+  if(!Array.isArray(parsed.events)) throw new Error('事件结构无效');
+  const events = parsed.events.map(ev => ({
+    ...ev,
+    startTime: parseLLMTime(ev.startTime),
+    endTime: parseLLMTime(ev.endTime),
+  })).filter(ev => ev.startTime && ev.endTime && ev.title);
+  return events;
+}
+
+// Fallback: direct fetch page HTML (no JS execution). We strip tags to approximate visible text.
+async function fallbackFetchPage(url, log, warn){
+  try {
+    const res = await fetch(url, { credentials:'include' });
+    if(!res.ok){ warn('fallback fetch status', res.status); return ''; }
+    const html = await res.text();
+    // Very naive strip; keeps some spacing
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi,' ')
+      .replace(/<style[\s\S]*?<\/style>/gi,' ')
+      .replace(/<[^>]+>/g,'\n')
+      .replace(/&nbsp;/g,' ')
+      .replace(/[\t ]+/g,' ')
+      .replace(/\n{2,}/g,'\n')
+      .trim();
+    log('fallbackFetchPage length=', text.length);
+    return text;
+  } catch(e){
+    warn('fallback fetch error', e.message);
+    return '';
+  }
 }

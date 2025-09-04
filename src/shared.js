@@ -13,6 +13,12 @@ export const DEFAULTS = {
   llmApiKey: '',
   llmProvider: 'zhipu_agent',
   llmAgentId: '1954810625930809344',
+  // 页面解析（fetch 策略下）JSON 直取配置
+  pageParseJsonMode: 'llm', // 'llm' | 'json'  -> json 表示直接按路径提取事件，不调用 LLM
+  // 多行 JSON 路径，示例： data.events[*]\n data.schoolCalendar.events[*]
+  // 语法： path = seg(.seg)*  seg = key | key[index] | key[*] | [index] | [*]
+  // key: /^[A-Za-z0-9_]+$/; index: 数字
+  pageParseJsonPaths: 'data.events[*]',
 };
 
 // Pages where calendar features are active

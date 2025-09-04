@@ -8,7 +8,8 @@
     "storage",
     "alarms",
     "notifications",
-    "contextMenus"
+    "contextMenus",
+    "scripting"
   ],
   "host_permissions": [
     "https://calendar.sjtu.edu.cn/*",
@@ -29,7 +30,8 @@
         "*://calendar.sjtu.edu.cn/*"
       ],
       "js": ["src/content.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
   "background": {"service_worker": "src/background.js", "type":"module"},
