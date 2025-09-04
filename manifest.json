@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "SJTU Auto Calendar",
+  "description": "自动获取并解析 SJTU 校历事件，上传到 Radicale，并支持选中文本 LLM 解析。",
+  "version": "0.1.0",
+  "icons": {"16":"icons/icon.png","48":"icons/icon.png","128":"icons/icon.png"},
+  "permissions": [
+    "storage",
+    "alarms",
+    "notifications",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "https://calendar.sjtu.edu.cn/*",
+    "https://my.sjtu.edu.cn/*",
+    "http://127.0.0.1:5232/*",
+    "http://localhost:5232/*",
+    "https://open.bigmodel.cn/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "*://my.sjtu.edu.cn/ui/calendar*",
+        "*://my.sjtu.edu.cn/*",
+        "*://calendar.sjtu.edu.cn/*"
+      ],
+      "js": ["src/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {"service_worker": "src/background.js", "type":"module"},
+  "options_page": "options.html",
+  "action": { "default_title": "SJTU Calendar", "default_popup": "popup.html" }
+  ,"commands": {
+    "parse-selection": {
+      "suggested_key": { "default": "Ctrl+Shift+P" },
+      "description": "解析当前页面选中文本"
+    },
+    "sync-now": {
+      "suggested_key": { "default": "Ctrl+Shift+R" },
+      "description": "立即执行一次同步"
+    }
+  }
+}

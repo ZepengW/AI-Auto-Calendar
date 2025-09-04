@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <title>SJTU Auto Calendar</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>
+        body {
+            font-family: system-ui, Segoe UI;
+            min-width: 280px;
+            margin: 0;
+            padding: 14px;
+            background: #f5f9ff
+        }
+
+        h1 {
+            font-size: 16px;
+            margin: 0 0 10px 0
+        }
+
+        button {
+            cursor: pointer;
+            border: none;
+            border-radius: 8px;
+            padding: 8px 12px;
+            font-size: 13px;
+            font-weight: 600
+        }
+
+        button.primary {
+            background: #0b74de;
+            color: #fff
+        }
+
+        .row {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap
+        }
+    </style>
+</head>
+
+<body>
+    <h1>SJTU Auto Calendar</h1>
+    <div class="row">
+        <button id="openOptions" class="primary">打开设置</button>
+        <button id="syncNow">立即同步</button>
+        <button id="parseText">日程解析</button>
+    </div>
+    <div id="status" style="margin-top:12px;font-size:12px;color:#555"></div>
+    <script src="src/popup.js" type="module"></script>
+</body>
+
+</html>

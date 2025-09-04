@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>自由文本日程解析 - SJTU Auto Calendar</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body{font-family:system-ui,Segoe UI;margin:0;display:flex;flex-direction:column;min-height:100vh;background:#f5f8fc;color:#1e2833}
+    header{padding:14px 20px;background:#0b74de;color:#fff;display:flex;align-items:center;gap:14px}
+    header h1{font-size:18px;margin:0;font-weight:600}
+    main{flex:1;display:flex;flex-direction:column;gap:14px;padding:18px;max-width:1100px;width:100%;margin:0 auto;box-sizing:border-box}
+    textarea{width:100%;resize:vertical;min-height:160px;padding:12px;border:1px solid #d0d7e2;border-radius:10px;font-size:14px;line-height:1.5;font-family:ui-monospace,Consolas,monaco}
+    button{cursor:pointer;border:none;border-radius:8px;padding:8px 16px;font-size:14px;font-weight:600;display:inline-flex;align-items:center;gap:6px}
+    button.primary{background:#0b74de;color:#fff}
+    button.outline{background:#fff;color:#0b74de;border:1px solid #0b74de}
+    button.danger{background:#d93c3c;color:#fff}
+    .toolbar{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+    .hint{font-size:12px;color:#4d5b6c;line-height:1.4}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+    table{width:100%;border-collapse:collapse;font-size:13px;background:#fff;border:1px solid #d8e0ea;border-radius:10px;overflow:hidden}
+    thead{background:#eef3f9}
+    th,td{padding:8px 10px;border-bottom:1px solid #e5ecf3;text-align:left;vertical-align:top}
+    tbody tr:last-child td{border-bottom:none}
+    th{font-weight:600;font-size:12px;color:#2d4258}
+    .badge{display:inline-block;padding:2px 8px;border-radius:12px;background:#eef4ff;color:#0b74de;font-size:11px;font-weight:600}
+    .muted{color:#6b7b8c;font-size:12px}
+    .actions{display:flex;gap:10px}
+    .select-col{text-align:center;width:38px}
+    input[type=checkbox]{width:16px;height:16px}
+    .status-bar{font-size:12px;color:#4d5b6c;display:flex;gap:14px;flex-wrap:wrap}
+    footer{padding:14px 18px;font-size:12px;color:#5e7084;background:#f0f4f9;text-align:center}
+    .error-box{background:#ffecec;color:#9d1f1f;padding:10px 14px;border:1px solid #f5c4c4;border-radius:8px;font-size:13px}
+    .success-box{background:#e8f9ef;color:#117a32;padding:10px 14px;border:1px solid #b5e9c8;border-radius:8px;font-size:13px}
+    .split{display:flex;flex-direction:column;gap:14px}
+    @media (max-width:1100px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>自由文本日程解析</h1>
+    <div style="flex:1"></div>
+    <button id="openOptions" class="outline" title="打开设置">设置</button>
+  </header>
+  <main>
+    <section class="split">
+      <div class="hint">输入任意自然语言/半结构化文本（可包含多条）。示例：<br/>明天 15:00-16:30 在软件学院 220 会议室开 AI 项目评审会；9月18日全天 外聘专家对接；每周三 9:00-10:00 组会（持续四周）。</div>
+      <textarea id="rawInput" placeholder="在此粘贴或输入要解析的文本，可多行"></textarea>
+      <div class="toolbar">
+        <button id="btnParse" class="primary">调用 LLM 解析</button>
+        <button id="btnClear" class="outline">清空</button>
+        <button id="btnMock" class="outline" title="插入示例">示例</button>
+        <div id="parseStatus" class="muted"></div>
+      </div>
+    </section>
+    <section id="resultSection" style="display:none">
+      <h2 style="margin:4px 0 10px;font-size:15px">解析结果 <span id="resultCount" class="badge">0</span></h2>
+      <div class="hint">请选择要上传的事件，可在上传前编辑标题/地点/时间。</div>
+      <div class="actions" style="margin:8px 0 10px">
+        <button id="btnUpload" class="primary" disabled>上传所选事件</button>
+        <button id="btnSelectAll" class="outline">全选</button>
+        <button id="btnInvert" class="outline">反选</button>
+      </div>
+      <div style="overflow:auto;max-height:360px">
+        <table id="eventsTable">
+          <thead>
+            <tr>
+              <th class="select-col"><input type="checkbox" id="chkAll" /></th>
+              <th>标题</th>
+              <th>开始时间</th>
+              <th>结束时间</th>
+              <th>地点</th>
+              <th>原始JSON</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div id="uploadStatus" style="margin-top:10px"></div>
+    </section>
+    <section id="messageBox" style="display:none"></section>
+  </main>
+  <footer>LLM 解析数据不会本地持久化；上传目标 Radicale 日历名称：<code>LLM-Parsed</code></footer>
+  <script type="module" src="src/parse.js"></script>
+</body>
+</html>

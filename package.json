@@ -1,0 +1,12 @@
+{
+  "name": "sjtu-auto-calendar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "echo 'No build step yet'",
+    "lint": "eslint src --ext .js",
+    "format": "prettier --write \"**/*.{js,json,md,html}\"",
+    "check-format": "prettier --check \"**/*.{js,json,md,html}\""
+  }
+}

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <title>SJTU Auto Calendar 设置</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>
+        body {
+            font-family: system-ui, Segoe UI, Roboto, Arial;
+            padding: 24px;
+            max-width: 880px;
+            margin: 0 auto;
+            background: #f7faff;
+            color: #222
+        }
+
+        h1 {
+            margin-top: 0
+        }
+
+        fieldset {
+            border: 1px solid #e2e8f2;
+            padding: 16px 20px;
+            border-radius: 14px;
+            background: #fff;
+            margin-bottom: 20px
+        }
+
+        legend {
+            padding: 0 8px;
+            font-weight: 600
+        }
+
+        label {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            font-size: 13px;
+            margin-bottom: 12px
+        }
+
+        input[type=text],
+        input[type=number],
+        select {
+            padding: 8px 10px;
+            border-radius: 8px;
+            border: 1px solid #d4dbe6;
+            font-size: 14px
+        }
+
+        .row {
+            display: flex;
+            gap: 18px;
+            flex-wrap: wrap
+        }
+
+        button {
+            cursor: pointer;
+            border: none;
+            border-radius: 10px;
+            padding: 10px 18px;
+            font-weight: 600;
+            font-size: 14px
+        }
+
+        button.primary {
+            background: #0b74de;
+            color: #fff
+        }
+
+        button.ghost {
+            background: #fff;
+            border: 1px solid #d4dbe6
+        }
+
+        .actions {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+            margin-top: 10px
+        }
+
+        .note {
+            font-size: 12px;
+            color: #666;
+            margin-top: -6px;
+            margin-bottom: 14px
+        }
+
+        .badge {
+            display: inline-block;
+            background: #0b74de;
+            color: #fff;
+            padding: 2px 8px;
+            border-radius: 20px;
+            font-size: 12px;
+            margin-left: 8px
+        }
+    </style>
+</head>
+
+<body>
+    <h1>SJTU Auto Calendar 设置 <span class="badge">v0.1.0</span></h1>
+    <fieldset>
+        <legend>Radicale 同步</legend>
+        <div class="row"> <label style="flex:2">Radicale Base URL<input id="radicalBase" type="text"
+                    placeholder="http://127.0.0.1:5232"></label> <label style="flex:1">用户名<input id="radicalUsername"
+                    type="text" placeholder="user"></label> </div> <label>Authorization Header (可选，如 Basic xxxx)<input
+                id="radicalAuth" type="text" placeholder=""></label>
+        <div class="row"> <label>自动同步周期(分钟)<input id="autoSyncMinutes" type="number" min="1"></label>
+            <label>日期窗口天数(前后)<input id="dateWindowDays" type="number" min="0"></label> <label>启用系统通知<select
+                    id="enableNotifications">
+                    <option value="true">是</option>
+                    <option value="false">否</option>
+                </select></label> </div>
+        <div style="font-size:12px;color:#555">Radicale server 需支持直接 PUT .ics (例如 docker 反向代理)。</div>
+    </fieldset>
+    <fieldset>
+        <legend>LLM 文本解析</legend> <label>服务类型<select id="llmProvider">
+                <option value="zhipu_agent">智谱智能体</option>
+            </select></label>
+        <div id="providerConfig"></div>
+    </fieldset>
+    <fieldset>
+        <legend>操作</legend>
+        <div class="actions"><button id="save" class="primary">保存</button> <button id="syncNow"
+                class="ghost">立即同步</button></div>
+        <div style="margin-top:10px;font-size:13px">最后同步: <span id="lastSync">n/a</span></div>
+    </fieldset>
+    <script type="module" src="src/options.js"></script>
+</body>
+
+</html>
