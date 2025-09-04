@@ -58,12 +58,39 @@ export function parseSJTUTime(s) {
   return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]));
 }
 
+// parseLLMTime: 尝试解析多种可能的 LLM 返回格式
+// 支持示例：
+// 1) 2025-09-05 15:00  -> 视为本地时区
+// 2) 2025-09-05 15:00:00
+// 3) 2025/09/05 15:00
+// 4) 2025-09-05T15:00:00+0800 / +08:00
+// 5) 20250905T150000+0800 (原格式)
+// 6) 2025-09-05T150000+0800
 export function parseLLMTime(s) {
   if (!s) return null;
-  const match = s.match(/(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})([+-]\d{4})/);
-  if (!match) return null;
-  const [_, y, m, d, H, M, S, tz] = match; // eslint-disable-line no-unused-vars
-  return new Date(`${y}-${m}-${d}T${H}:${M}:${S}${tz}`);
+  const str = s.trim();
+  // 原紧凑格式 YYYYMMDDTHHmmss+ZZZZ
+  let m = str.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})([+-]\d{4})$/);
+  if (m) {
+    const [_, y, mm, d, H, M, S, tz] = m; // eslint-disable-line no-unused-vars
+    return new Date(`${y}-${mm}-${d}T${H}:${M}:${S}${tz}`);
+  }
+  // 变体：YYYY-MM-DDTHHmmss+0800
+  m = str.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2})(\d{2})(\d{2})([+-]\d{4})$/);
+  if (m) {
+    const [_, y, mm, d, H, M, S, tz] = m;
+    return new Date(`${y}-${mm}-${d}T${H}:${M}:${S}${tz}`);
+  }
+  // ISO 基本：YYYY-MM-DDTHH:MM(:SS)?(Z|+08:00|+0800)?
+  m = str.match(/^(\d{4})[-/](\d{2})[-/](\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?(Z|[+-]\d{2}:?\d{2})?$/);
+  if (m) {
+    let [_, y, mm, d, H, M, S = '00', tz = ''] = m;
+    if (tz && /^([+-]\d{2})(\d{2})$/.test(tz)) { // +0800 -> +08:00
+      tz = tz.replace(/([+-]\d{2})(\d{2})/, '$1:$2');
+    }
+    return new Date(`${y}-${mm}-${d}T${H}:${M}:${S}${tz}`);
+  }
+  return null;
 }
 
 export function escapeICSText(s) {

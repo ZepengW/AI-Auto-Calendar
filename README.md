@@ -35,6 +35,17 @@ SJTU-Auto-Calendar/
 - notifications: 同步/解析提示
 - contextMenus: 右键菜单
 - host_permissions: 访问 SJTU 日历、Radicale、本地 LLM 或 API
+ - optional_host_permissions: 动态申请用户自定义 Radicale 服务器地址（保存设置时自动请求）
+
+### 自定义 Radicale 服务器与 CORS
+1. 在 Options 中填入 `Radicale Base`（例如 `http://118.25.148.28:5232`）并保存，会自动申请该源的 host 权限。
+2. 若上传时报 `No 'Access-Control-Allow-Origin'`：这是服务器未返回 CORS 允许头。解决方案：
+   - 推荐：在 Radicale 前加一个反向代理 (Nginx/Caddy) 添加：
+     `Access-Control-Allow-Origin: *`
+     `Access-Control-Allow-Methods: GET, PUT, OPTIONS`
+     `Access-Control-Allow-Headers: Authorization, Content-Type`
+   - 或本地使用浏览器调试禁用 CORS 仅限测试，不建议生产。
+3. 权限缺失提示：扩展会通知“缺少服务器权限”，重新到设置保存即可重新触发申请。
 
 ## 与油猴版本差异
 - 使用 `chrome.storage.local` 替换 GM_* API

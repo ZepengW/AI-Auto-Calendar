@@ -86,12 +86,36 @@ async function saveAll(){
       patch.llmApiUrl = (qs('llmApiUrl')?.value || '').trim();
       patch.llmApiKey = (qs('llmApiKey')?.value || '').trim();
     }
+    // 动态申请 Radicale 服务器权限（避免 CORS 尝试在无 host 权限时失败）
+    const originPattern = buildOriginPattern(patch.radicalBase);
+    if(originPattern){
+      await requestOriginPermission(originPattern);
+    }
     await saveSettings(patch);
-    alert('已保存');
+    alert('已保存' + (originPattern ? ` (已申请权限: ${originPattern})` : ''));
   } catch(e){
     console.error('保存失败', e);
     alert('保存失败: ' + (e.message || e));
   }
+}
+
+function buildOriginPattern(url){
+  try {
+    if(!url) return null;
+    const u = new URL(url);
+    // 只保留协议 + 主机 + 端口
+    return `${u.protocol}//${u.hostname}${u.port?':'+u.port:''}/*`;
+  } catch(_){ return null; }
+}
+
+async function requestOriginPermission(pattern){
+  return new Promise((resolve) => {
+    if(!chrome.permissions || !pattern) return resolve(false);
+    chrome.permissions.contains({ origins:[pattern] }, (has)=>{
+      if(has) return resolve(true);
+      chrome.permissions.request({ origins:[pattern] }, (granted)=>{ resolve(granted); });
+    });
+  });
 }
 
 document.addEventListener('DOMContentLoaded', init);

@@ -82,6 +82,22 @@ async function uploadToRadicale(ics, calendarName, settings) {
   const headers = { 'Content-Type': 'text/calendar; charset=utf-8' };
   if (auth) headers['Authorization'] = auth;
 
+  // 动态 host 权限检查（MV3 需有 host 权限才能直接 fetch，否则有些策略下会被阻止）
+  const originPattern = buildOriginFromUrl(base);
+  if (originPattern && chrome.permissions) {
+    try {
+      const ok = await new Promise((resolve)=>{
+        chrome.permissions.contains({ origins:[originPattern] }, (has)=> resolve(!!has));
+      });
+      if(!ok){
+        notifyAll('缺少服务器权限，请在设置中保存以申请：' + originPattern);
+        throw new Error('缺少权限 ' + originPattern);
+      }
+    } catch(e){
+      throw e;
+    }
+  }
+
   const put = await fetch(url, { method: 'PUT', headers, body: ics });
   if (put.status === 200 || put.status === 201 || put.status === 204) {
     await saveSettings({ lastSync: Date.now() });
@@ -89,6 +105,10 @@ async function uploadToRadicale(ics, calendarName, settings) {
     return { ok: true, url };
   }
   throw new Error('上传失败 ' + put.status);
+}
+
+function buildOriginFromUrl(raw){
+  try { const u = new URL(raw); return `${u.protocol}//${u.hostname}${u.port?':'+u.port:''}/*`; } catch(_){ return null; }
 }
 
 // Core sync sequence
@@ -314,18 +334,22 @@ async function parseLLMOnly(rawText) {
 
 async function uploadEventsList(events) {
   if (!Array.isArray(events) || !events.length) throw new Error('事件为空');
-  // 验证基础字段
-  for (const ev of events) {
-    if (!ev.startTime || !ev.endTime || !ev.title) throw new Error('事件缺少字段');
-  }
   const settings = await loadSettings();
-  const norm = events.map((ev) => ({
-    ...ev,
-    startTime: parseLLMTime(ev.startTime),
-    endTime: parseLLMTime(ev.endTime),
-  }));
+  const norm = events.map((ev) => {
+    const s = parseLLMTime(ev.startTimeRaw) || parseSJTUTime(ev.startTime) || (ev.startTime instanceof Date ? ev.startTime : null);
+    const e = parseLLMTime(ev.endTimeRaw) || parseSJTUTime(ev.endTime) || (ev.endTime instanceof Date ? ev.endTime : null);
+    return { ...ev, startTime: s, endTime: e };
+  });
+  // 过滤/校验
+  const valid = [];
+  const dropped = [];
+  for (const ev of norm) {
+    if (!ev.title || !ev.startTime || !ev.endTime) dropped.push(ev); else valid.push(ev);
+  }
+  if (!valid.length) throw new Error('全部事件缺少字段或时间格式无法解析');
   const ics = buildICS(norm, 'LLM-Parsed');
   await uploadToRadicale(ics, 'LLM-Parsed', settings);
-  notifyAll(`上传 ${norm.length} 条事件至 LLM-Parsed`);
-  return norm.length;
+  if (dropped.length) notifyAll(`上传 ${valid.length} 条事件，丢弃 ${dropped.length} 条字段不完整事件`);
+  else notifyAll(`上传 ${valid.length} 条事件至 LLM-Parsed`);
+  return valid.length;
 }

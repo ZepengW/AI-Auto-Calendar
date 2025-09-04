@@ -17,6 +17,10 @@
     "http://localhost:5232/*",
     "https://open.bigmodel.cn/*"
   ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
   "content_scripts": [
     {
       "matches": [
