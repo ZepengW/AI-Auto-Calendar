@@ -123,41 +123,15 @@
         <div id="providerConfig"></div>
     </fieldset>
     <fieldset>
-        <legend>页面定时解析 (LLM 基座)</legend>
-        <div class="row">
-            <label style="flex:2">目标页面 URL <input id="pageParseUrl" type="text" placeholder="https://my.sjtu.edu.cn/ui/calendar"></label>
-            <label style="flex:1">解析周期(分钟)<input id="pageParseInterval" type="number" min="1" placeholder="60"></label>
+        <legend>页面定时解析 (多任务 V3)</legend>
+        <div style="margin-bottom:10px;padding:8px 10px;border:1px solid #d4dbe6;border-radius:10px;background:#fff">
+            <div style="font-size:13px;font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:8px">
+                任务列表 <button id="addPageTask" type="button" style="margin-left:auto;background:#0b74de;color:#fff;border:none;padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer">新增任务</button>
+            </div>
+            <div id="pageTasksEmpty" style="font-size:12px;color:#666">暂无任务，点击“新增任务”创建。</div>
+            <ul id="pageTaskList" style="list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:8px"></ul>
         </div>
-        <div class="row">
-            <label style="flex:1">日历名称(上传)<input id="pageParseCalendarName" type="text" placeholder="PARSED-SJTU"></label>
-            <label style="flex:1">启用定时<select id="pageParseEnabled"><option value="true">是</option><option value="false">否</option></select></label>
-            <label style="flex:1">解析策略<select id="pageParseStrategy">
-              <option value="fetch">直接HTTP获取(fetch)</option>
-              <option value="capture">页面渲染捕获(capture)</option>
-            </select></label>
-        </div>
-                <div class="note">策略说明：fetch=直接HTTP获取原始HTML(稳定, 无动态渲染)；capture=打开标签并尝试注入脚本获取渲染后文本，失败自动回退 fetch。</div>
-                <div id="jsonExtractPanel" style="display:none;margin-top:8px;padding:10px;border:1px dashed #b9c6d4;border-radius:8px;background:#fcfdff">
-                    <div style="font-size:13px;font-weight:600;margin-bottom:6px">JSON 直取配置 (仅 fetch)</div>
-                    <label style="margin-bottom:6px;flex:none;display:block;font-weight:500">模式:
-                        <span style="display:flex;gap:20px;margin-top:6px;font-weight:400">
-                            <label style="flex:none;display:flex;align-items:center;gap:4px;font-weight:400">
-                                <input type="radio" name="pageParseJsonMode" value="llm" checked> LLM 解析 (默认)
-                            </label>
-                            <label style="flex:none;display:flex;align-items:center;gap:4px;font-weight:400">
-                                <input type="radio" name="pageParseJsonMode" value="json"> JSON 路径直取
-                            </label>
-                        </span>
-                    </label>
-                    <label>事件路径 (多行; 支持 data.events[*] / data.schoolCalendar.events[*])
-                        <textarea id="pageParseJsonPaths" style="min-height:80px;font-family:monospace;font-size:12px;padding:6px 8px;border-radius:6px;border:1px solid #d4dbe6;resize:vertical" placeholder="data.events[*]\ndata.schoolCalendar.events[*]"></textarea>
-                    </label>
-                    <div style="font-size:11px;color:#666;line-height:1.4">语法：<code>segment</code> 之间用点分隔；支持 <code>key</code>、<code>key[数字]</code>、<code>key[*]</code>、<code>[数字]</code>、<code>[*]</code>。<br>示例：<code>data.events[*]</code>；<code>data.schoolCalendar.events[0]</code>。合并所有结果数组。<br>对象需含 <code>title/startTime/endTime</code> 字段；可选 <code>location,status</code>。</div>
-                </div>
-        <div class="actions" style="justify-content:flex-start;gap:10px;margin-top:4px">
-            <button id="pageParseRun" class="ghost" type="button">立即执行一次页面解析</button>
-        </div>
-        <div style="font-size:12px;color:#666" id="pageParseStatus"></div>
+        <div style="font-size:11px;color:#666">旧版单任务配置已移除，所有调度请使用上方列表。</div>
     </fieldset>
     <fieldset>
         <legend>操作</legend>
@@ -166,6 +140,84 @@
         <div style="margin-top:10px;font-size:13px">最后同步: <span id="lastSync">n/a</span></div>
     </fieldset>
     <script type="module" src="src/options.js"></script>
+
+        <!-- 新版任务编辑模态 (V3) -->
+        <div id="taskModal" class="cal-modal-overlay" style="position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:flex-start;justify-content:center;padding:60px 20px;z-index:9999;backdrop-filter:blur(2px)">
+            <div class="cal-modal" style="width:640px;max-width:100%;background:#fff;border-radius:18px;padding:22px 26px;box-shadow:0 6px 34px -8px rgba(0,0,0,.35);display:flex;flex-direction:column;gap:18px;border:1px solid #e6edf5">
+                <div style="display:flex;align-items:center;justify-content:space-between">
+                    <h2 style="margin:0;font-size:18px;font-weight:650;letter-spacing:.5px;color:#0f172a" id="taskModalTitle">任务</h2>
+                    <button id="closeTaskModal" type="button" style="background:#f1f5f9;border:1px solid #d8e2ed;border-radius:8px;padding:6px 14px;cursor:pointer;font-size:13px;font-weight:600;color:#334155">关闭</button>
+                </div>
+                <form id="taskForm" style="display:flex;flex-direction:column;gap:18px">
+                    <div class="row" style="gap:20px;align-items:flex-start">
+                        <label style="flex:1;min-width:180px">任务名称
+                            <input id="task_name" type="text" required style="margin-top:4px">
+                        </label>
+                        <label style="flex:1;min-width:180px">日历名称
+                            <input id="task_calendarName" type="text" placeholder="ICS 名称" required style="margin-top:4px">
+                        </label>
+                        <label style="flex:0.6;min-width:120px">启用
+                            <select id="task_enabled" style="margin-top:4px"><option value="true">是</option><option value="false">否</option></select>
+                        </label>
+                    </div>
+                    <fieldset class="cal-fieldset" style="border:1px solid #e1e8f0;padding:16px 18px;border-radius:14px;margin:0;display:flex;flex-direction:column;gap:14px;background:#fafcff">
+                        <legend style="padding:0 8px;font-size:13px;font-weight:600;color:#0f172a">定时策略</legend>
+                        <div style="display:flex;gap:32px;font-size:13px;flex-wrap:wrap">
+                            <label style="display:flex;align-items:center;gap:6px"><input type="radio" name="task_scheduleType" value="interval" checked> 周期(分钟)</label>
+                            <label style="display:flex;align-items:center;gap:6px"><input type="radio" name="task_scheduleType" value="times"> 指定时间点(HH:mm)</label>
+                        </div>
+                        <div id="schedule_interval_wrap" style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
+                            <label style="flex:0 0 180px">触发周期（分钟）
+                                <input id="task_interval" type="number" min="1" style="margin-top:4px" required>
+                            </label>
+                        </div>
+                        <div id="schedule_times_wrap" style="display:none;flex-direction:column;gap:10px">
+                            <div id="task_times_list" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+                            <div style="display:flex;gap:10px;flex-wrap:wrap">
+                                <input id="task_time_input" type="text" placeholder="HH:mm" style="flex:1;min-width:140px;padding:8px 10px;border:1px solid #d4dbe6;border-radius:10px;font-size:13px">
+                                <button type="button" id="task_time_add" style="background:#0b74de;color:#fff;padding:8px 16px;border:none;border-radius:10px;font-size:12px;font-weight:600;cursor:pointer">添加时间点</button>
+                            </div>
+                            <div style="font-size:11px;color:#64748b">触发后自动排入下一天同一时间；例如 08:30 / 14:05</div>
+                        </div>
+                    </fieldset>
+                    <fieldset style="border:1px solid #e1e8f0;padding:16px 18px;border-radius:14px;margin:0;display:flex;flex-direction:column;gap:14px;background:#fafcff">
+                        <legend style="padding:0 8px;font-size:13px;font-weight:600;color:#0f172a">数据获取模式</legend>
+                        <div style="display:flex;flex-direction:column;gap:14px">
+                            <label style="width:220px;font-size:13px">模式
+                                <select id="task_mode" style="margin-top:4px"><option value="HTTP_GET_JSON">HTTP_GET_JSON</option></select>
+                            </label>
+                            <div id="modePanel_HTTP_GET_JSON" style="display:flex;flex-direction:column;gap:14px">
+                                <label>目标 URL
+                                    <input id="task_url" type="text" required placeholder="https://..." style="margin-top:4px">
+                                </label>
+                                <div style="display:flex;gap:20px;flex-wrap:wrap">
+                                    <label style="flex:0 0 220px">解析方式
+                                        <select id="task_parseMode" style="margin-top:4px"><option value="llm">LLM</option><option value="direct">直接(JSON提取)</option></select>
+                                    </label>
+                                    LLM：大模型解析非结构化事件文本；直接：直接使用JSON结果上传。
+                                    <!-- <div style="flex:1;font-size:11px;color:#64748b;line-height:1.5;align-self:flex-end">LLM：大模型解析非结构化事件文本；直接：直接使用JSON结果上传。</div> -->
+                                </div>
+                                <label id="task_jsonPaths_wrap" style="display:block">JSON 路径
+                                    <textarea id="task_jsonPaths" style="margin-top:6px;height:40px;line-height:1.4;font-family:monospace;font-size:12px;padding:8px 10px;border:1px solid #d4dbe6;border-radius:10px;resize:vertical" placeholder="示例(每行一条):\n# 整个 data: data\n# events 数组本身: data.events\n# events 全部元素: data.events[*]\n# events 第 0 条: data.events[0]\n# 校历 events: data.schoolCalendar.events[*]\n# 多来源分多行"></textarea>
+                                </label>
+                                <div style="font-size:11px;color:#64748b;line-height:1.55">
+                                    说明：每行一条轻量路径（不是完整 JSONPath）。支持 <code>key</code> / <code>key[数字]</code> / <code>key[*]</code> / <code>[数字]</code> / <code>[*]</code> 链式。<br>
+                                    展开规则：只有以 <code>[*]</code> 或 <code>[数字]</code> 结尾的路径才会把数组元素逐个加入；否则保留整个数组/对象作为一个片段。<br>
+                                    direct 模式：片段中的对象/数组元素若含 <code>title/startTime/endTime</code>（或别名）即尝试识别事件。<br>
+                                    LLM 模式：片段集合会序列化为精简 JSON 传给模型，降低噪声。<br>
+                                    不支持：条件过滤 / 范围 / 多索引（如 <code>[?()]</code>、<code>[0:5]</code> 等）。<br>
+                                    留空：不裁剪（可能上下文冗余大）。
+                                </div>
+                            </div>
+                        </div>
+                    </fieldset>
+                    <div style="display:flex;gap:14px;justify-content:flex-end;margin-top:4px">
+                        <button type="button" id="taskRunOnce" style="background:#fff;border:1px solid #d4dbe6;padding:10px 22px;border-radius:10px;font-weight:600;cursor:pointer;color:#0f172a">试运行</button>
+                        <button type="submit" style="background:#0b74de;color:#fff;border:none;padding:10px 28px;border-radius:10px;font-weight:600;cursor:pointer;box-shadow:0 2px 4px rgba(0,0,0,.15)">保存</button>
+                    </div>
+                </form>
+            </div>
+        </div>
 </body>
 
 </html>

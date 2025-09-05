@@ -50,6 +50,7 @@ async function init(){
   els.lastSync = qs('lastSync');
   els.saveBtn = qs('save');
   els.syncNow = qs('syncNow');
+  // legacy single-task elements (to be removed); keep null-safe usage
   els.pageParseUrl = qs('pageParseUrl');
   els.pageParseInterval = qs('pageParseInterval');
   els.pageParseCalendarName = qs('pageParseCalendarName');
@@ -60,8 +61,34 @@ async function init(){
   els.pageParseJsonPaths = qs('pageParseJsonPaths');
   els.jsonExtractPanel = qs('jsonExtractPanel');
   els.pageParseJsonModeRadios = Array.from(document.querySelectorAll('input[name="pageParseJsonMode"]'));
+  // multi task UI
+  els.pageTaskList = qs('pageTaskList');
+  els.pageTasksEmpty = qs('pageTasksEmpty');
+  els.addPageTask = qs('addPageTask');
+  // modal fields
+  els.taskModal = qs('taskModal');
+  els.closeTaskModal = qs('closeTaskModal');
+  els.taskForm = qs('taskForm');
+  els.taskModalTitle = qs('taskModalTitle');
+  els.task_name = qs('task_name');
+  els.task_interval = qs('task_interval');
+  els.task_calendarName = qs('task_calendarName');
+  els.task_enabled = qs('task_enabled');
+  els.task_url = qs('task_url');
+  els.task_mode = qs('task_mode');
+  els.task_parseMode = qs('task_parseMode');
+  els.task_jsonPaths = qs('task_jsonPaths');
+  els.task_jsonPaths_wrap = qs('task_jsonPaths_wrap');
+  els.task_scheduleTypeRadios = Array.from(document.querySelectorAll('input[name="task_scheduleType"]'));
+  els.schedule_interval_wrap = qs('schedule_interval_wrap');
+  els.schedule_times_wrap = qs('schedule_times_wrap');
+  els.task_times_list = qs('task_times_list');
+  els.task_time_input = qs('task_time_input');
+  els.task_time_add = qs('task_time_add');
+  els.taskRunOnce = qs('taskRunOnce');
+  els._editingTaskId = null;
 
-  const cfg = await loadSettings();
+  const cfg = await loadSettings(); // after migration background will have moved tasks
   const mapping = {
     radicalBase: 'radicalBase',
     radicalUsername: 'radicalUsername',
@@ -99,9 +126,20 @@ async function init(){
   els.llmProvider?.addEventListener('change', () => fillProvider({ llmProvider: els.llmProvider.value }));
   els.saveBtn?.addEventListener('click', saveAll);
   els.syncNow?.addEventListener('click', () => chrome.runtime.sendMessage({ type: 'SYNC_NOW' }));
-  els.pageParseRun?.addEventListener('click', runPageParseNow);
+  els.pageParseRun?.addEventListener('click', ()=> alert('旧版单任务即将移除，请使用上方多任务')); // deprecate
   els.pageParseStrategy?.addEventListener('change', updateJsonPanelVisibility);
   els.pageParseJsonModeRadios?.forEach(r => r.addEventListener('change', ()=>{}));
+  // multi task events
+  els.addPageTask?.addEventListener('click', ()=> openTaskModal());
+  els.closeTaskModal?.addEventListener('click', closeTaskModal);
+  els.taskForm?.addEventListener('submit', submitTaskForm);
+  els.task_parseMode?.addEventListener('change', updateTaskModalVisibility);
+  els.task_mode?.addEventListener('change', updateTaskModalVisibility);
+  els.task_scheduleTypeRadios?.forEach(r=> r.addEventListener('change', updateScheduleModeVisibility));
+  els.task_time_add?.addEventListener('click', addTimePoint);
+  els.taskRunOnce?.addEventListener('click', tryRunOnceCurrentTask);
+
+  await loadRenderTasks();
 }
 
 function updateJsonPanelVisibility(){
@@ -109,6 +147,173 @@ function updateJsonPanelVisibility(){
   const strat = els.pageParseStrategy?.value || 'fetch';
   els.jsonExtractPanel.style.display = strat === 'fetch' ? 'block':'none';
 }
+
+function updateTaskModalVisibility(){
+  // JSON 路径现在在两种模式都可用：direct 提取 或 LLM 预裁剪，不再隐藏
+  if(els.task_jsonPaths_wrap){ els.task_jsonPaths_wrap.style.display = 'block'; }
+}
+
+function updateScheduleModeVisibility(){
+  const st = (els.task_scheduleTypeRadios.find(r=> r.checked)?.value) || 'interval';
+  if(els.schedule_interval_wrap) els.schedule_interval_wrap.style.display = st==='interval' ? 'flex':'none';
+  if(els.schedule_times_wrap) els.schedule_times_wrap.style.display = st==='times' ? 'flex':'none';
+}
+
+function renderTimes(times){
+  if(!els.task_times_list) return; els.task_times_list.innerHTML='';
+  times.forEach((t,i)=>{
+    const chip = document.createElement('span');
+    chip.style.cssText='background:#eef4fa;border:1px solid #d0dbe8;padding:4px 8px;border-radius:20px;font-size:12px;display:inline-flex;align-items:center;gap:6px';
+    chip.innerHTML = `<span>${t}</span><button data-i="${i}" style="background:transparent;border:none;color:#666;cursor:pointer;font-size:12px">×</button>`;
+    chip.querySelector('button').addEventListener('click',()=>{
+      const arr = (els._editingTimes||[]).slice(); arr.splice(i,1); els._editingTimes=arr; renderTimes(arr);
+    });
+    els.task_times_list.appendChild(chip);
+  });
+}
+
+function addTimePoint(){
+  const v = (els.task_time_input.value||'').trim();
+  if(!/^\d{2}:\d{2}$/.test(v)){ alert('格式 HH:mm'); return; }
+  els._editingTimes = [...(els._editingTimes||[]), v];
+  els.task_time_input.value='';
+  renderTimes(els._editingTimes);
+}
+
+async function loadRenderTasks(){
+  try {
+    const resp = await chrome.runtime.sendMessage({ type:'GET_PAGE_TASKS' });
+    if(!resp?.ok) throw new Error(resp.error||'获取任务失败');
+    renderTasks(resp.tasks||[]);
+  } catch(e){
+    console.error('加载任务失败', e);
+  }
+}
+
+function renderTasks(tasks){
+  if(!els.pageTaskList) return;
+  els.pageTaskList.innerHTML='';
+  if(!tasks.length){ if(els.pageTasksEmpty) els.pageTasksEmpty.style.display='block'; return; }
+  if(els.pageTasksEmpty) els.pageTasksEmpty.style.display='none';
+  for(const t of tasks){
+    const li = document.createElement('li');
+    li.style.border='1px solid #d4dbe6';
+    li.style.padding='8px 10px';
+    li.style.borderRadius='10px';
+    li.style.background='#fff';
+    li.style.display='flex';
+    li.style.flexDirection='column';
+    li.style.gap='6px';
+    li.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:600">
+        <span title="${escapeHtml(t.url)}">${escapeHtml(t.name||'未命名')}</span>
+        <span style="font-size:11px;font-weight:500;color:${t.enabled?'#0b6':'#999'}">${t.enabled?'启用':'停用'}</span>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:#555">
+        <span>${t.strategy}</span>
+        <span>${t.jsonMode}</span>
+        <span>${t.interval}m</span>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button data-act="run" style="flex:1;background:#0b74de;color:#fff;border:none;padding:6px 0;border-radius:6px;font-size:12px;cursor:pointer">运行</button>
+        <button data-act="edit" style="flex:1;background:#fff;border:1px solid #c5d3e2;padding:6px 0;border-radius:6px;font-size:12px;cursor:pointer">编辑</button>
+        <button data-act="del" style="flex:1;background:#fff;border:1px solid #f0b6b6;color:#c24d4d;padding:6px 0;border-radius:6px;font-size:12px;cursor:pointer">删除</button>
+      </div>`;
+    li.querySelector('[data-act=run]').addEventListener('click', (e)=> runTask(t.id, e.currentTarget));
+    li.querySelector('[data-act=edit]').addEventListener('click', ()=> openTaskModal(t));
+    li.querySelector('[data-act=del]').addEventListener('click', async ()=>{
+      const tasks2 = tasks.filter(x=> x.id !== t.id);
+      await saveTasks(tasks2);
+      renderTasks(tasks2);
+    });
+    els.pageTaskList.appendChild(li);
+  }
+}
+
+function openTaskModal(task){
+  els._editingTaskId = task?.id || null;
+  els._editingTimes = Array.isArray(task?.times)? task.times.slice(): [];
+  els.taskModalTitle.textContent = task? '编辑任务':'新增任务';
+  // new model mapping (fields reuse for now until UI redesign)
+  els.task_name.value = task?.name || '';
+  els.task_calendarName.value = task?.calendarName || task?.name || '';
+  els.task_interval.value = task?.intervalMinutes || task?.interval || 60;
+  els.task_enabled.value = task?.enabled? 'true':'false';
+  els.task_url.value = task?.modeConfig?.url || task?.url || '';
+  els.task_mode.value = 'HTTP_GET_JSON';
+  els.task_parseMode.value = (task?.modeConfig?.parseMode === 'direct') ? 'direct':'llm';
+  els.task_jsonPaths.value = task?.modeConfig?.jsonPaths || task?.jsonPaths || 'data.events[*]';
+  // schedule type
+  const st = task?.scheduleType || 'interval';
+  els.task_scheduleTypeRadios.forEach(r=> r.checked = (r.value===st));
+  updateScheduleModeVisibility();
+  renderTimes(els._editingTimes);
+  updateTaskModalVisibility();
+  els.taskModal.style.display='flex';
+}
+
+function closeTaskModal(){
+  els.taskModal.style.display='none';
+  els._editingTaskId = null;
+}
+
+async function submitTaskForm(ev){
+  ev.preventDefault();
+  const resp = await chrome.runtime.sendMessage({ type:'GET_PAGE_TASKS' });
+  const tasks = (resp?.tasks)||[];
+  const scheduleType = (els.task_scheduleTypeRadios.find(r=> r.checked)?.value) || 'interval';
+  const data = {
+    id: els._editingTaskId || ('task-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6)),
+    name: els.task_name.value.trim()||'Untitled',
+    calendarName: (els.task_calendarName.value.trim()|| els.task_name.value.trim() || 'Untitled'),
+    enabled: els.task_enabled.value === 'true',
+    scheduleType,
+    intervalMinutes: scheduleType==='interval' ? Math.max(1, Number(els.task_interval.value)||60) : undefined,
+    times: scheduleType==='times' ? (els._editingTimes||[]) : [],
+    mode: els.task_mode.value,
+    modeConfig: {
+      url: els.task_url.value.trim(),
+      jsonPaths: els.task_jsonPaths.value.trim(),
+      parseMode: (els.task_parseMode.value === 'direct') ? 'direct':'llm',
+    },
+  };
+  if(scheduleType==='interval') delete data.times; else delete data.intervalMinutes;
+  const newTasks = els._editingTaskId ? tasks.map(t=> t.id===data.id? data: t) : [...tasks, data];
+  await saveTasks(newTasks);
+  closeTaskModal();
+  renderTasks(newTasks);
+}
+
+async function runTask(id, btn){
+  try {
+    if(btn){ btn.disabled=true; btn.textContent='运行中'; }
+    const r = await chrome.runtime.sendMessage({ type:'RUN_PAGE_TASK', id });
+    if(!r?.ok) throw new Error(r.error||'执行失败');
+  } catch(e){
+    alert('执行失败: '+ e.message);
+  } finally {
+    if(btn){ btn.disabled=false; btn.textContent='运行'; }
+  }
+}
+
+async function tryRunOnceCurrentTask(){
+  if(!els._editingTaskId){ alert('请先保存任务后运行'); return; }
+  const btn = els.taskRunOnce;
+  try {
+    btn.disabled=true; btn.textContent='试运行中';
+    const r = await chrome.runtime.sendMessage({ type:'RUN_PAGE_TASK', id: els._editingTaskId });
+    if(!r?.ok) alert('试运行失败: '+ (r.error||'未知错误')); else alert('试运行完成: +'+(r.added||0));
+  } catch(e){
+    alert('试运行异常: '+ e.message);
+  } finally { btn.disabled=false; btn.textContent='试运行'; }
+}
+
+async function saveTasks(tasks){
+  const r = await chrome.runtime.sendMessage({ type:'SAVE_PAGE_TASKS', tasks });
+  if(!r?.ok) throw new Error(r.error||'保存任务失败');
+}
+
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;' }[c])); }
 
 async function saveAll(){
   try {

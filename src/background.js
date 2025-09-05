@@ -9,6 +9,88 @@ import {
   parseLLMTime,
 } from './shared.js';
 
+// -------------------------------------------------
+// 新版多任务模型 (V3)
+// tasks (存储键: pageTasks): Array<{
+//   id: string;
+//   name: string;             // 任务名称（管理用）
+//   calendarName: string;     // 上传到 Radicale 的日历文件前缀/名称
+//   enabled: boolean;
+//   scheduleType: 'interval'|'times';
+//   intervalMinutes: number;  // scheduleType=interval 时有效
+//   times: string[];          // scheduleType=times 时有效，格式 HH:mm
+//   mode: 'HTTP_GET_JSON';    // 数据获取模式（目前仅支持这一种）
+//   modeConfig: {             // 模式配置
+//     url: string;            // 目标 URL (HTTP GET)
+//     jsonPaths: string;      // 多行 JSON 路径 (同旧版)
+//     parseMode: 'llm'|'direct'; // llm=页面/文本经 LLM 解析；direct=JSON 路径直取
+//   };
+// }>
+// 旧版迁移：
+// - pageParseTasks / legacy 单任务字段 -> 生成 scheduleType=interval 的新任务；calendarName = 旧 name / pageParseCalendarName；parseMode 映射 jsonMode=json->direct
+// - 删除旧的 pageParse* 与 pageParseTasks 键
+
+async function loadAllSettingsWithTaskMigration(){
+  const s = await loadSettings();
+  let changed = false;
+  if(!Array.isArray(s.pageTasks)){
+    const legacyTasks = Array.isArray(s.pageParseTasks) ? s.pageParseTasks : [];
+    const out = [];
+    if(legacyTasks.length){
+      for(const t of legacyTasks){
+        out.push(convOldTask(t));
+      }
+    } else if(s.pageParseUrl){
+      // 单任务迁移
+      out.push(convLegacySingle(s));
+    }
+    s.pageTasks = out;
+    changed = true;
+  }
+  // 清理旧键
+  const oldKeys = ['pageParseTasks','pageParseUrl','pageParseInterval','pageParseCalendarName','pageParseEnabled','pageParseStrategy','pageParseJsonMode','pageParseJsonPaths'];
+  const patch = { pageTasks: s.pageTasks };
+  for(const k of oldKeys){ if(k in s){ patch[k] = undefined; changed = true; } }
+  if(changed) await saveSettings(patch);
+  return s;
+}
+
+function convOldTask(t){
+  return {
+    id: t.id || ('migr-'+Math.random().toString(36).slice(2)),
+    name: t.name || '任务',
+    calendarName: t.name || 'PAGE-PARSED',
+    enabled: !!t.enabled,
+    scheduleType: 'interval',
+    intervalMinutes: Math.max(1, Number(t.interval)||60),
+    times: [],
+    mode: 'HTTP_GET_JSON',
+    modeConfig: {
+      url: t.url || '',
+      jsonPaths: t.jsonPaths || 'data.events[*]',
+      parseMode: t.jsonMode === 'json' ? 'direct':'llm',
+    },
+  };
+}
+
+function convLegacySingle(s){
+  return {
+    id: 'legacy-single',
+    name: s.pageParseCalendarName || 'PAGE-PARSED',
+    calendarName: s.pageParseCalendarName || 'PAGE-PARSED',
+    enabled: !!s.pageParseEnabled,
+    scheduleType: 'interval',
+    intervalMinutes: Math.max(1, Number(s.pageParseInterval)||60),
+    times: [],
+    mode: 'HTTP_GET_JSON',
+    modeConfig: {
+      url: s.pageParseUrl || '',
+      jsonPaths: s.pageParseJsonPaths || 'data.events[*]',
+      parseMode: (s.pageParseJsonMode === 'json') ? 'direct':'llm',
+    },
+  };
+}
+
 // ------------------------------------------------------
 // Basic HTTP wrapper (keeps credentials for SJTU calendar)
 // ------------------------------------------------------
@@ -266,13 +348,47 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true;
   }
+  if (msg?.type === 'GET_PAGE_TASKS') {
+    loadAllSettingsWithTaskMigration().then(s => sendResponse({ ok:true, tasks: s.pageTasks||[] })).catch(e=> sendResponse({ ok:false, error:e.message }));
+    return true;
+  }
+  if (msg?.type === 'SAVE_PAGE_TASKS') {
+    (async ()=>{
+      const tasks = Array.isArray(msg.tasks)? sanitizeNewTasks(msg.tasks): [];
+      await saveSettings({ pageTasks: tasks });
+      await ensureAllPageTaskAlarms();
+      sendResponse({ ok:true });
+    })().catch(e=> sendResponse({ ok:false, error:e.message }));
+    return true;
+  }
+  if (msg?.type === 'RUN_PAGE_TASK') {
+    (async ()=>{
+      const s = await loadAllSettingsWithTaskMigration();
+      const task = (s.pageTasks||[]).find(t=> t.id === msg.id);
+      if(!task) throw new Error('任务不存在');
+      const result = await runSinglePageTask(task);
+      sendResponse({ ok:true, ...result });
+    })().catch(e=> sendResponse({ ok:false, error:e.message }));
+    return true;
+  }
   return undefined;
 });
 
 // Alarm trigger
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === 'AUTO_SYNC') runSync();
-  if (a.name === 'PAGE_PARSE_AUTO') runPageParseScheduled();
+  if (a.name === 'PAGE_PARSE_AUTO') runPageParseScheduled(); // legacy safeguard
+  if (a.name.startsWith('PAGE_TASK_INTERVAL_')){
+    const id = a.name.slice('PAGE_TASK_INTERVAL_'.length);
+    triggerPageTaskById(id);
+  }
+  if (a.name.startsWith('PAGE_TASK_TIME_')){
+    // 格式: PAGE_TASK_TIME_<taskId>_<index>
+    const parts = a.name.split('_');
+    const taskId = parts[3];
+    const idx = Number(parts[4]);
+    triggerPageTaskById(taskId, idx, true);
+  }
 });
 
 // Ensure alarm exists
@@ -285,11 +401,11 @@ async function ensureAlarm() {
 chrome.runtime.onInstalled.addListener(() => {
   ensureAlarm();
   createMenus();
-  ensurePageParseAlarm();
+  ensureAllPageTaskAlarms();
 });
 chrome.runtime.onStartup.addListener(() => {
   ensureAlarm();
-  ensurePageParseAlarm();
+  ensureAllPageTaskAlarms();
 });
 chrome.commands?.onCommand.addListener((command) => {
   if (command === 'parse-selection') {
@@ -516,6 +632,109 @@ async function runPageParseOnce(url, calendarName){
 }
 
 // -----------------------------
+// 多任务执行辅助
+// -----------------------------
+async function ensureAllPageTaskAlarms(){
+  const s = await loadAllSettingsWithTaskMigration();
+  const existing = await chrome.alarms.getAll();
+  for(const a of existing){
+    if(a.name.startsWith('PAGE_TASK_INTERVAL_') || a.name.startsWith('PAGE_TASK_TIME_')) chrome.alarms.clear(a.name);
+  }
+  for(const t of (s.pageTasks||[])){
+    if(!t.enabled) continue;
+    if(t.scheduleType === 'interval'){
+      const iv = Math.max(1, Number(t.intervalMinutes)||0);
+      if(!iv || !t.modeConfig?.url) continue;
+      chrome.alarms.create('PAGE_TASK_INTERVAL_'+t.id, { periodInMinutes: iv });
+    } else if(t.scheduleType === 'times') {
+      if(!Array.isArray(t.times) || !t.times.length) continue;
+      t.times.forEach((tm, idx)=>{
+        const when = computeNextTimePoint(tm);
+        if(when) chrome.alarms.create(`PAGE_TASK_TIME_${t.id}_${idx}`, { when: when.getTime() });
+      });
+    }
+  }
+}
+
+function computeNextTimePoint(hhmm){
+  if(!/^\d{2}:\d{2}$/.test(hhmm)) return null;
+  const [H,M] = hhmm.split(':').map(Number);
+  const now = new Date();
+  const d = new Date();
+  d.setHours(H, M, 0, 0);
+  if(d.getTime() <= now.getTime()) d.setDate(d.getDate()+1); // 下一天
+  return d;
+}
+
+async function triggerPageTaskById(id, timeIndex, isTimeAlarm){
+  try {
+    const s = await loadAllSettingsWithTaskMigration();
+    const task = (s.pageTasks||[]).find(t=> t.id === id);
+    if(!task) return notifyAll('任务不存在: '+ id);
+    if(!task.enabled) return; // 禁用
+    await runSinglePageTask(task);
+    // 若是 times 模式的单次闹钟，需要重新排程下一次
+    if(isTimeAlarm && task.scheduleType === 'times' && typeof timeIndex === 'number'){
+      const tt = task.times?.[timeIndex];
+      if(tt){
+        const when = computeNextTimePoint(tt);
+        if(when) chrome.alarms.create(`PAGE_TASK_TIME_${task.id}_${timeIndex}`, { when: when.getTime() });
+      }
+    }
+  } catch(e){
+    notifyAll('任务执行失败: ' + e.message);
+  }
+}
+
+function sanitizeNewTasks(tasks){
+  // 基础字段约束 & 过滤无 URL
+  return tasks.map(t => ({
+    id: t.id || ('task-'+Math.random().toString(36).slice(2)),
+    name: t.name || '任务',
+    calendarName: t.calendarName || t.name || 'PAGE-PARSED',
+    enabled: !!t.enabled,
+    scheduleType: (t.scheduleType === 'times' ? 'times':'interval'),
+    intervalMinutes: Math.max(1, Number(t.intervalMinutes)|| (Number(t.interval)||60) ),
+    times: Array.isArray(t.times)? t.times.filter(x=>/^\d{2}:\d{2}$/.test(x)) : [],
+    mode: 'HTTP_GET_JSON',
+    modeConfig: {
+      url: t.modeConfig?.url || t.url || '',
+      jsonPaths: t.modeConfig?.jsonPaths || t.jsonPaths || 'data.events[*]',
+      parseMode: (t.modeConfig?.parseMode || (t.jsonMode==='json'?'direct':'llm') || 'llm') === 'direct' ? 'direct':'llm',
+    },
+  })).filter(t => t.modeConfig.url);
+}
+
+async function runSinglePageTask(task){
+  if(task.mode !== 'HTTP_GET_JSON') throw new Error('不支持的模式');
+  const { calendarName, modeConfig } = task;
+  const url = modeConfig.url;
+  if(!url) throw new Error('URL 为空');
+  let text = '';
+  try { text = await fallbackFetchPage(url, console.log, console.warn); } catch{ text=''; }
+  if(modeConfig.parseMode === 'direct'){
+    const pseudoSettings = { pageParseJsonPaths: modeConfig.jsonPaths };
+    const events = await tryParseJsonEvents(text, pseudoSettings) || [];
+    if(events.length){
+      const info = await mergeUpload(calendarName || 'PAGE-PARSED', events);
+      notifyAll(`任务 ${calendarName} (direct) 完成: +${events.length} (总${info.total})`);
+      return { added: events.length, total: info.total, direct:true };
+    }
+    // direct 失败则尝试 LLM 兜底
+  }
+  // LLM 模式：若提供 JSON 路径且原始文本是 JSON，先裁剪以减少噪声
+  let llmInput = text;
+  if(modeConfig.jsonPaths){
+    const narrowed = narrowTextByJsonPaths(text, modeConfig.jsonPaths);
+    if(narrowed) llmInput = narrowed;
+  }
+  const eventsLLM = await parseTextViaLLM(llmInput);
+  const info2 = await mergeUpload(calendarName || 'PAGE-PARSED', eventsLLM);
+  notifyAll(`任务 ${calendarName} 完成: +${eventsLLM.length} (总${info2.total})`);
+  return { added: eventsLLM.length, total: info2.total };
+}
+
+// -----------------------------
 // JSON 直取工具
 // -----------------------------
 function tokenizeJsonPath(path){
@@ -603,6 +822,40 @@ async function tryParseJsonEvents(text, settings){
   }
   const valid = events.filter(e => e.title && e.startTime && e.endTime);
   return valid.length ? valid : null;
+}
+
+// 供 LLM 模式调用：若原文本是 JSON，根据路径抽取匹配节点集合并序列化为精简 JSON 片段
+function narrowTextByJsonPaths(rawText, pathsStr){
+  if(!rawText || !pathsStr) return null;
+  const trimmed = rawText.trim();
+  if(!(trimmed.startsWith('{') || trimmed.startsWith('['))) return null; // 不是 JSON
+  let obj; try { obj = JSON.parse(trimmed); } catch { return null; }
+  const rawPaths = pathsStr.split(/\n+/).map(s=>s.trim()).filter(Boolean);
+  if(!rawPaths.length) return null;
+  const collected = [];
+  for(const p of rawPaths){
+    if(!p) continue;
+    let vals;
+    try { vals = evaluateSinglePath(obj, p); } catch { continue; }
+    if(!vals || !vals.length) continue;
+    const explicitArrayMatch = /(\[(?:\d+|\*)\])\s*$/.test(p);
+    for(const v of vals){
+      if(Array.isArray(v)){
+        if(explicitArrayMatch){
+          for(const item of v){ collected.push(item); if(collected.length>=200) break; }
+        } else {
+          collected.push(v);
+        }
+      } else {
+        collected.push(v);
+      }
+      if(collected.length>=200) break;
+    }
+    if(collected.length>=200) break;
+  }
+  if(!collected.length) return null;
+  const snippet = JSON.stringify(collected.slice(0,200), null, 2);
+  return snippet.length > 18000 ? snippet.slice(0,18000) : snippet;
 }
 
 function collectEventCandidate(obj, out){
