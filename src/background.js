@@ -16,9 +16,14 @@ import {
 //   name: string;             // 任务名称（管理用）
 //   calendarName: string;     // 上传到 Radicale 的日历文件前缀/名称
 //   enabled: boolean;
-//   scheduleType: 'interval'|'times';
-//   intervalMinutes: number;  // scheduleType=interval 时有效
-//   times: string[];          // scheduleType=times 时有效，格式 HH:mm
+//   scheduleType: 'interval'|'times'; // 旧版单选，保留兼容
+//   // 新版可多选触发：
+//   useInterval: boolean;
+//   intervalMinutes: number;  // useInterval 时有效
+//   useTimes: boolean;
+//   times: string[];          // useTimes 时有效，格式 HH:mm
+//   visitTrigger: boolean;    // 访问页面触发
+//   visitPatterns: string[];  // 可选，前缀匹配；为空则默认使用 modeConfig.url
 //   mode: 'HTTP_GET_JSON';    // 数据获取模式（目前仅支持这一种）
 //   modeConfig: {             // 模式配置
 //     url: string;            // 目标 URL (HTTP GET)
@@ -62,8 +67,12 @@ function convOldTask(t){
     calendarName: t.name || 'PAGE-PARSED',
     enabled: !!t.enabled,
     scheduleType: 'interval',
+    useInterval: true,
     intervalMinutes: Math.max(1, Number(t.interval)||60),
+    useTimes: false,
     times: [],
+    visitTrigger: false,
+    visitPatterns: [],
     mode: 'HTTP_GET_JSON',
     modeConfig: {
       url: t.url || '',
@@ -80,8 +89,12 @@ function convLegacySingle(s){
     calendarName: s.pageParseCalendarName || 'PAGE-PARSED',
     enabled: !!s.pageParseEnabled,
     scheduleType: 'interval',
+    useInterval: true,
     intervalMinutes: Math.max(1, Number(s.pageParseInterval)||60),
+    useTimes: false,
     times: [],
+    visitTrigger: false,
+    visitPatterns: [],
     mode: 'HTTP_GET_JSON',
     modeConfig: {
       url: s.pageParseUrl || '',
@@ -308,9 +321,11 @@ async function runSync() {
 // Broadcast notification to user (toast + system notification)
 function notifyAll(text) {
   console.log('[SJTU Auto Calendar]', text);
+  // Use existing icon if available, fall back if missing
+  const iconPath = 'icons/icon.png';
   chrome.notifications?.create({
     type: 'basic',
-    iconUrl: 'icons/icon128.png',
+    iconUrl: iconPath,
     title: 'SJTU Auto Calendar',
     message: text.substring(0, 180),
   });
@@ -349,26 +364,57 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
   if (msg?.type === 'GET_PAGE_TASKS') {
-    loadAllSettingsWithTaskMigration().then(s => sendResponse({ ok:true, tasks: s.pageTasks||[] })).catch(e=> sendResponse({ ok:false, error:e.message }));
+    loadAllSettingsWithTaskMigration()
+      .then((s) => sendResponse({ ok: true, tasks: s.pageTasks || [] }))
+      .catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }
   if (msg?.type === 'SAVE_PAGE_TASKS') {
-    (async ()=>{
-      const tasks = Array.isArray(msg.tasks)? sanitizeNewTasks(msg.tasks): [];
+    (async () => {
+      const tasks = Array.isArray(msg.tasks) ? sanitizeNewTasks(msg.tasks) : [];
       await saveSettings({ pageTasks: tasks });
       await ensureAllPageTaskAlarms();
-      sendResponse({ ok:true });
-    })().catch(e=> sendResponse({ ok:false, error:e.message }));
+      sendResponse({ ok: true });
+    })().catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }
   if (msg?.type === 'RUN_PAGE_TASK') {
-    (async ()=>{
+    (async () => {
       const s = await loadAllSettingsWithTaskMigration();
-      const task = (s.pageTasks||[]).find(t=> t.id === msg.id);
-      if(!task) throw new Error('任务不存在');
-      const result = await runSinglePageTask(task);
-      sendResponse({ ok:true, ...result });
-    })().catch(e=> sendResponse({ ok:false, error:e.message }));
+      const task = (s.pageTasks || []).find((t) => t.id === msg.id);
+      if (!task) throw new Error('任务不存在');
+      const result = await runTaskWithLogging(task, 'manual', { source: 'popup/options' });
+      sendResponse({ ok: true, ...result });
+    })().catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+  if (msg?.type === 'GET_TASK_LOGS') {
+    (async () => {
+      const limit = Math.max(1, Math.min(Number(msg.limit) || 200, 1000));
+      const logs = await getTaskLogs(limit);
+      sendResponse({ ok: true, logs });
+    })().catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+  if (msg?.type === 'CLEAR_TASK_LOGS') {
+    (async () => {
+      await saveSettings({ pageTaskLogs: [] });
+      sendResponse({ ok: true });
+    })().catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+  if (msg?.type === 'REBUILD_PAGE_TASK_ALARMS') {
+    (async () => {
+      await ensureAllPageTaskAlarms();
+      sendResponse({ ok: true });
+    })().catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+  if (msg?.type === 'DEBUG_LIST_ALARMS') {
+    (async () => {
+      const all = await chrome.alarms.getAll();
+      sendResponse({ ok: true, alarms: all.map((a) => ({ name: a.name, scheduledTime: a.scheduledTime, periodInMinutes: a.periodInMinutes })) });
+    })().catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }
   return undefined;
@@ -376,18 +422,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
 // Alarm trigger
 chrome.alarms.onAlarm.addListener((a) => {
+  console.log('[SJTU] onAlarm', a.name, 'at', new Date().toISOString());
   if (a.name === 'AUTO_SYNC') runSync();
   if (a.name === 'PAGE_PARSE_AUTO') runPageParseScheduled(); // legacy safeguard
   if (a.name.startsWith('PAGE_TASK_INTERVAL_')){
     const id = a.name.slice('PAGE_TASK_INTERVAL_'.length);
-    triggerPageTaskById(id);
+    triggerPageTaskById(id, undefined, false, 'interval');
   }
   if (a.name.startsWith('PAGE_TASK_TIME_')){
     // 格式: PAGE_TASK_TIME_<taskId>_<index>
     const parts = a.name.split('_');
     const taskId = parts[3];
     const idx = Number(parts[4]);
-    triggerPageTaskById(taskId, idx, true);
+    triggerPageTaskById(taskId, idx, true, 'time');
   }
 });
 
@@ -399,13 +446,17 @@ async function ensureAlarm() {
 }
 
 chrome.runtime.onInstalled.addListener(() => {
+  console.log('[SJTU] onInstalled -> ensureAlarm & ensureAllPageTaskAlarms');
   ensureAlarm();
   createMenus();
   ensureAllPageTaskAlarms();
+  setupUrlVisitTrigger();
 });
 chrome.runtime.onStartup.addListener(() => {
+  console.log('[SJTU] onStartup -> ensureAlarm & ensureAllPageTaskAlarms');
   ensureAlarm();
   ensureAllPageTaskAlarms();
+  setupUrlVisitTrigger();
 });
 chrome.commands?.onCommand.addListener((command) => {
   if (command === 'parse-selection') {
@@ -583,6 +634,10 @@ chrome.storage?.onChanged.addListener((changes) => {
   if(changes.pageParseEnabled || changes.pageParseInterval || changes.pageParseUrl){
     ensurePageParseAlarm();
   }
+  if(changes.pageTasks){
+    // Recompute all task alarms when tasks updated via storage
+    ensureAllPageTaskAlarms();
+  }
 });
 
 async function runPageParseScheduled(){
@@ -637,20 +692,28 @@ async function runPageParseOnce(url, calendarName){
 async function ensureAllPageTaskAlarms(){
   const s = await loadAllSettingsWithTaskMigration();
   const existing = await chrome.alarms.getAll();
+  console.log('[SJTU] ensureAllPageTaskAlarms existing=', existing.map(a=>a.name));
   for(const a of existing){
     if(a.name.startsWith('PAGE_TASK_INTERVAL_') || a.name.startsWith('PAGE_TASK_TIME_')) chrome.alarms.clear(a.name);
   }
   for(const t of (s.pageTasks||[])){
     if(!t.enabled) continue;
-    if(t.scheduleType === 'interval'){
+    const wantInterval = (t.useInterval === true) || (t.useInterval === undefined && t.scheduleType === 'interval');
+    const wantTimes = (t.useTimes === true) || (t.useTimes === undefined && t.scheduleType === 'times');
+    if(wantInterval){
       const iv = Math.max(1, Number(t.intervalMinutes)||0);
       if(!iv || !t.modeConfig?.url) continue;
       chrome.alarms.create('PAGE_TASK_INTERVAL_'+t.id, { periodInMinutes: iv });
-    } else if(t.scheduleType === 'times') {
-      if(!Array.isArray(t.times) || !t.times.length) continue;
+      console.log('[SJTU] created interval alarm for', t.id, 'every', iv, 'min');
+    }
+    if(wantTimes) {
+      if(!Array.isArray(t.times) || !t.times.length || !t.modeConfig?.url) continue;
       t.times.forEach((tm, idx)=>{
         const when = computeNextTimePoint(tm);
-        if(when) chrome.alarms.create(`PAGE_TASK_TIME_${t.id}_${idx}`, { when: when.getTime() });
+        if(when) {
+          chrome.alarms.create(`PAGE_TASK_TIME_${t.id}_${idx}`, { when: when.getTime() });
+          console.log('[SJTU] scheduled time alarm', tm, 'for task', t.id, 'at', when.toISOString());
+        }
       });
     }
   }
@@ -672,7 +735,7 @@ async function triggerPageTaskById(id, timeIndex, isTimeAlarm){
     const task = (s.pageTasks||[]).find(t=> t.id === id);
     if(!task) return notifyAll('任务不存在: '+ id);
     if(!task.enabled) return; // 禁用
-    await runSinglePageTask(task);
+    await runTaskWithLogging(task, isTimeAlarm ? 'time' : 'interval', { timeIndex, time: (Array.isArray(task.times)? task.times[timeIndex]: undefined) });
     // 若是 times 模式的单次闹钟，需要重新排程下一次
     if(isTimeAlarm && task.scheduleType === 'times' && typeof timeIndex === 'number'){
       const tt = task.times?.[timeIndex];
@@ -694,8 +757,13 @@ function sanitizeNewTasks(tasks){
     calendarName: t.calendarName || t.name || 'PAGE-PARSED',
     enabled: !!t.enabled,
     scheduleType: (t.scheduleType === 'times' ? 'times':'interval'),
+    // 新版触发：多选
+    useInterval: !!t.useInterval,
     intervalMinutes: Math.max(1, Number(t.intervalMinutes)|| (Number(t.interval)||60) ),
+    useTimes: !!t.useTimes,
     times: Array.isArray(t.times)? t.times.filter(x=>/^\d{2}:\d{2}$/.test(x)) : [],
+    visitTrigger: !!t.visitTrigger,
+    visitPatterns: Array.isArray(t.visitPatterns) ? t.visitPatterns.filter(s=> typeof s === 'string' && s.trim()).map(s=>s.trim()) : [],
     mode: 'HTTP_GET_JSON',
     modeConfig: {
       url: t.modeConfig?.url || t.url || '',
@@ -1033,3 +1101,96 @@ async function fallbackFetchPage(url, log, warn){
     return '';
   }
 }
+
+// ---------------------------------
+// URL-visit trigger (webNavigation)
+// ---------------------------------
+let _urlVisitCooldown = new Map(); // key: taskId -> lastRunTs
+
+function normalizeUrl(u){
+  try { const x = new URL(u); return x.origin + x.pathname; } catch { return u; }
+}
+
+function setupUrlVisitTrigger(){
+  try {
+    if(!chrome.webNavigation?.onCommitted) return;
+    // Remove previous listeners to avoid duplication on SW restart
+    chrome.webNavigation.onCommitted.removeListener(_onCommittedHandler);
+    chrome.webNavigation.onCommitted.addListener(_onCommittedHandler);
+    console.log('[SJTU] webNavigation onCommitted listener attached');
+  } catch(e){
+    console.warn('[SJTU] setupUrlVisitTrigger failed', e.message);
+  }
+}
+
+async function _onCommittedHandler(details){
+  try {
+    if(details.frameId !== 0) return; // only main frame
+    const urlNorm = normalizeUrl(details.url || '');
+    const s = await loadAllSettingsWithTaskMigration();
+    const tasks = (s.pageTasks||[]).filter(t => t.enabled && t.mode === 'HTTP_GET_JSON' && t.visitTrigger === true);
+    if(!tasks.length) return;
+    for(const t of tasks){
+      // Determine patterns set: explicit visitPatterns or fallback to task URL
+      const pats = (Array.isArray(t.visitPatterns) && t.visitPatterns.length ? t.visitPatterns : (t.modeConfig?.url ? [t.modeConfig.url] : []));
+      if(!pats.length) continue;
+      // prefix match on origin+pathname
+      const matched = pats.some(p => {
+        const base = normalizeUrl(p);
+        if(!base) return false;
+        return urlNorm.startsWith(base);
+      });
+      if(matched){
+        const last = _urlVisitCooldown.get(t.id) || 0;
+        const now = Date.now();
+        // Cooldown 3 minutes to avoid loops when task fetches same URL etc.
+        if(now - last < 3*60*1000) continue;
+        _urlVisitCooldown.set(t.id, now);
+        console.log('[SJTU] URL visit matched task', t.id, '-> runSinglePageTask');
+        try { await runTaskWithLogging(t, 'visit', { url: details.url }); } catch(e){ notifyAll('URL触发任务失败: ' + e.message); }
+      }
+    }
+  } catch(e){
+    console.warn('[SJTU] onCommitted handler error', e.message);
+  }
+}
+
+// ---------------------------------
+// Task Logging (persisted ring buffer)
+// ---------------------------------
+async function appendTaskLog(entry){
+  try {
+    const s = await loadSettings();
+    const list = Array.isArray(s.pageTaskLogs) ? s.pageTaskLogs : [];
+    list.push(entry);
+    const MAX = 1000;
+    const trimmed = list.length > MAX ? list.slice(list.length-MAX) : list;
+    await saveSettings({ pageTaskLogs: trimmed });
+  } catch(_){}
+}
+
+async function getTaskLogs(limit=200){
+  const s = await loadSettings();
+  const list = Array.isArray(s.pageTaskLogs) ? s.pageTaskLogs : [];
+  const out = list.slice(-limit).reverse();
+  return out;
+}
+
+async function runTaskWithLogging(task, triggerType, info){
+  const start = Date.now();
+  const base = { ts: start, type: 'trigger', triggerType, taskId: task.id, taskName: task.name || task.calendarName || task.id, info };
+  await appendTaskLog(base);
+  try {
+    const result = await runSinglePageTask(task);
+    const done = Date.now();
+    await appendTaskLog({ ts: done, type: 'result', triggerType, taskId: task.id, taskName: task.name || task.calendarName || task.id, durationMs: done-start, ok: true, added: result.added||0, total: result.total||0, mode: result.direct ? 'direct':'llm' });
+    return result;
+  } catch(e){
+    const done = Date.now();
+    await appendTaskLog({ ts: done, type: 'result', triggerType, taskId: task.id, taskName: task.name || task.calendarName || task.id, durationMs: done-start, ok: false, error: e.message });
+    throw e;
+  }
+}
+
+// Attach URL trigger immediately on service worker load as well
+setupUrlVisitTrigger();

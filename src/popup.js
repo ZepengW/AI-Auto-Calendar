@@ -97,23 +97,27 @@ function initModalRefs(){
   modal.fields.name = qs('p_task_name');
   modal.fields.calendarName = qs('p_task_calendarName');
   modal.fields.interval = qs('p_task_interval');
+  modal.fields.useInterval = qs('p_task_useInterval');
   modal.fields.enabled = qs('p_task_enabled');
   modal.fields.url = qs('p_task_url');
   modal.fields.mode = qs('p_task_mode');
   modal.fields.parseMode = qs('p_task_parseMode');
   modal.fields.jsonPaths = qs('p_task_jsonPaths');
   modal.fields.jsonWrap = qs('p_task_jsonPaths_wrap');
-  modal.fields.scheduleTypeRadios = Array.from(document.querySelectorAll('input[name="p_task_scheduleType"]'));
-  modal.fields.intervalWrap = qs('p_schedule_interval_wrap');
+  modal.fields.useTimes = qs('p_task_useTimes');
   modal.fields.timesWrap = qs('p_schedule_times_wrap');
   modal.fields.timesList = qs('p_task_times_list');
   modal.fields.timeInput = qs('p_task_time_input');
   modal.fields.timeAdd = qs('p_task_time_add');
+  modal.fields.visitTrigger = qs('p_task_visitTrigger');
+  modal.fields.visitPatterns = qs('p_task_visitPatterns');
+  modal.fields.visitWrap = qs('p_visit_patterns_wrap');
   modal.runBtn = qs('p_taskRunOnce');
   qs('popupCloseTaskModal')?.addEventListener('click', closeEditModal);
   modal.fields.parseMode?.addEventListener('change', updatePopupModalVisibility);
   modal.fields.mode?.addEventListener('change', updatePopupModalVisibility);
-  modal.fields.scheduleTypeRadios?.forEach(r=> r.addEventListener('change', updatePopupScheduleVisibility));
+  modal.fields.useTimes?.addEventListener('change', updatePopupScheduleVisibility);
+  modal.fields.visitTrigger?.addEventListener('change', updateVisitVisibility);
   modal.fields.timeAdd?.addEventListener('click', addPopupTimePoint);
   modal.form?.addEventListener('submit', submitPopupModalForm);
   modal.runBtn?.addEventListener('click', runOncePopupModal);
@@ -127,6 +131,7 @@ function openEditModal(task, all){
   modal.fields.name.value = task.name||'';
   modal._times = Array.isArray(task.times)? task.times.slice(): [];
   modal.fields.interval.value = task.intervalMinutes || task.interval || 60;
+  modal.fields.useInterval.checked = (task.useInterval === true) || (!('useInterval' in task) && (task.scheduleType !== 'times'));
   modal.fields.enabled.value = task.enabled? 'true':'false';
   modal.fields.calendarName.value = task.calendarName || task.name || '';
   modal.fields.url.value = task.modeConfig?.url || task.url || '';
@@ -135,9 +140,12 @@ function openEditModal(task, all){
   // adjust to use 'direct' instead of legacy 'json'
   if(modal.fields.parseMode.value === 'json') modal.fields.parseMode.value = 'direct';
   modal.fields.jsonPaths.value = task.modeConfig?.jsonPaths || task.jsonPaths || 'data.events[*]';
-  modal.fields.scheduleTypeRadios.forEach(r=> r.checked = (r.value === (task.scheduleType || 'interval')));
+  modal.fields.useTimes.checked = !!task.useTimes || (task.scheduleType === 'times');
+  modal.fields.visitTrigger.checked = !!task.visitTrigger;
+  modal.fields.visitPatterns.value = Array.isArray(task.visitPatterns) ? task.visitPatterns.join('\n') : '';
   renderPopupTimes();
   updatePopupScheduleVisibility();
+  updateVisitVisibility();
   updatePopupModalVisibility();
   modal.wrap.style.display='flex';
 }
@@ -150,9 +158,13 @@ function updatePopupModalVisibility(){
 }
 
 function updatePopupScheduleVisibility(){
-  const st = (modal.fields.scheduleTypeRadios.find(r=> r.checked)?.value) || 'interval';
-  if(modal.fields.intervalWrap) modal.fields.intervalWrap.style.display = st==='interval' ? 'flex':'none';
-  if(modal.fields.timesWrap) modal.fields.timesWrap.style.display = st==='times' ? 'flex':'none';
+  const useTimes = !!modal.fields.useTimes?.checked;
+  if(modal.fields.timesWrap) modal.fields.timesWrap.style.display = useTimes ? 'flex':'none';
+}
+
+function updateVisitVisibility(){
+  const enabled = !!modal.fields.visitTrigger?.checked;
+  if(modal.fields.visitWrap) modal.fields.visitWrap.style.display = enabled ? 'flex':'none';
 }
 
 function renderPopupTimes(){
@@ -186,9 +198,14 @@ async function submitPopupModalForm(e){
     name: modal.fields.name.value.trim()||'Untitled',
     calendarName: modal.fields.calendarName.value.trim() || modal.fields.name.value.trim() || 'Untitled',
     enabled: modal.fields.enabled.value === 'true',
-    scheduleType: st,
-    intervalMinutes: st==='interval' ? Math.max(1, Number(modal.fields.interval.value)||60) : undefined,
-    times: st==='times' ? (modal._times||[]) : [],
+    // retain legacy scheduleType for compatibility with stored data
+    scheduleType: (modal.fields.useTimes?.checked && !modal.fields.useInterval?.checked) ? 'times' : 'interval',
+    useInterval: !!modal.fields.useInterval?.checked,
+    intervalMinutes: !!modal.fields.useInterval?.checked ? Math.max(1, Number(modal.fields.interval.value)||60) : undefined,
+    useTimes: !!modal.fields.useTimes?.checked,
+    times: !!modal.fields.useTimes?.checked ? (modal._times||[]) : [],
+    visitTrigger: !!modal.fields.visitTrigger?.checked,
+    visitPatterns: (modal.fields.visitPatterns?.value||'').split(/\n+/).map(s=>s.trim()).filter(Boolean),
     mode: modal.fields.mode.value || 'HTTP_GET_JSON',
     modeConfig: {
       url: modal.fields.url.value.trim(),
@@ -196,7 +213,7 @@ async function submitPopupModalForm(e){
       parseMode: (modal.fields.parseMode.value === 'direct') ? 'direct':'llm',
     },
   };
-  if(st==='interval') delete updated.times; else delete updated.intervalMinutes;
+  if(!updated.useTimes) delete updated.times; if(!updated.useInterval) delete updated.intervalMinutes;
   const newTasks = tasks.map(x=> x.id===t.id? updated: x);
   try { await saveTasks(newTasks); renderTasks(newTasks); closeEditModal(); }
   catch(e){ alert('保存失败: '+ e.message); }

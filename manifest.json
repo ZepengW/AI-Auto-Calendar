@@ -9,7 +9,8 @@
     "alarms",
     "notifications",
     "contextMenus",
-    "scripting"
+    "scripting",
+    "webNavigation"
   ],
   "host_permissions": [
     "https://calendar.sjtu.edu.cn/*",

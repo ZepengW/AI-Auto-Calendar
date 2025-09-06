@@ -161,23 +161,32 @@
                         </label>
                     </div>
                     <fieldset class="cal-fieldset" style="border:1px solid #e1e8f0;padding:16px 18px;border-radius:14px;margin:0;display:flex;flex-direction:column;gap:14px;background:#fafcff">
-                        <legend style="padding:0 8px;font-size:13px;font-weight:600;color:#0f172a">定时策略</legend>
-                        <div style="display:flex;gap:32px;font-size:13px;flex-wrap:wrap">
-                            <label style="display:flex;align-items:center;gap:6px"><input type="radio" name="task_scheduleType" value="interval" checked> 周期(分钟)</label>
-                            <label style="display:flex;align-items:center;gap:6px"><input type="radio" name="task_scheduleType" value="times"> 指定时间点(HH:mm)</label>
-                        </div>
-                        <div id="schedule_interval_wrap" style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
-                            <label style="flex:0 0 180px">触发周期（分钟）
-                                <input id="task_interval" type="number" min="1" style="margin-top:4px" required>
+                        <legend style="padding:0 8px;font-size:13px;font-weight:600;color:#0f172a">触发方式（可多选）</legend>
+                        <div style="display:flex;flex-direction:column;gap:10px">
+                            <label style="display:flex;align-items:center;gap:10px"><input type="checkbox" id="task_useInterval"> 周期(分钟)
+                                <input id="task_interval" type="number" min="1" placeholder="间隔分钟" style="margin-left:8px;width:120px">
                             </label>
-                        </div>
-                        <div id="schedule_times_wrap" style="display:none;flex-direction:column;gap:10px">
-                            <div id="task_times_list" style="display:flex;gap:8px;flex-wrap:wrap"></div>
-                            <div style="display:flex;gap:10px;flex-wrap:wrap">
-                                <input id="task_time_input" type="text" placeholder="HH:mm" style="flex:1;min-width:140px;padding:8px 10px;border:1px solid #d4dbe6;border-radius:10px;font-size:13px">
-                                <button type="button" id="task_time_add" style="background:#0b74de;color:#fff;padding:8px 16px;border:none;border-radius:10px;font-size:12px;font-weight:600;cursor:pointer">添加时间点</button>
+                            <div>
+                                <label style="display:flex;align-items:center;gap:10px"><input type="checkbox" id="task_useTimes"> 指定时间点(HH:mm)</label>
+                                <div id="schedule_times_wrap" style="display:none;flex-direction:column;gap:10px;margin-top:6px">
+                                    <div id="task_times_list" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+                                    <div style="display:flex;gap:10px;flex-wrap:wrap">
+                                        <input id="task_time_input" type="text" placeholder="HH:mm" style="flex:1;min-width:140px;padding:8px 10px;border:1px solid #d4dbe6;border-radius:10px;font-size:13px">
+                                        <button type="button" id="task_time_add" style="background:#0b74de;color:#fff;padding:8px 16px;border:none;border-radius:10px;font-size:12px;font-weight:600;cursor:pointer">添加时间点</button>
+                                    </div>
+                                    <div style="font-size:11px;color:#64748b">触发后自动排入下一天同一时间；例如 08:30 / 14:05</div>
+                                </div>
                             </div>
-                            <div style="font-size:11px;color:#64748b">触发后自动排入下一天同一时间；例如 08:30 / 14:05</div>
+                            <div>
+                                <label style="display:flex;align-items:center;gap:10px"><input type="checkbox" id="task_visitTrigger"> 访问页面触发</label>
+                                <div id="visit_patterns_wrap" style="display:none;flex-direction:column;gap:6px;margin-top:6px">
+                                    <label>匹配前缀（每行一条，留空则默认使用目标 URL）
+                                        <textarea id="task_visitPatterns" style="margin-top:6px;height:60px;line-height:1.4;font-family:monospace;font-size:12px;padding:8px 10px;border:1px solid #d4dbe6;border-radius:10px;resize:vertical" placeholder="https://my.sjtu.edu.cn/ui/calendar
+https://calendar.sjtu.edu.cn/..."></textarea>
+                                    </label>
+                                    <div style="font-size:11px;color:#64748b">仅主框架导航触发；按 origin+pathname 前缀匹配，忽略 query。</div>
+                                </div>
+                            </div>
                         </div>
                     </fieldset>
                     <fieldset style="border:1px solid #e1e8f0;padding:16px 18px;border-radius:14px;margin:0;display:flex;flex-direction:column;gap:14px;background:#fafcff">
@@ -218,6 +227,24 @@
                 </form>
             </div>
         </div>
+
+    <!-- 任务日志面板 -->
+    <hr>
+    <section id="logs-section" style="margin-top: 16px;">
+        <h2 style="margin: 8px 0;">任务日志</h2>
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap: wrap; margin-bottom: 8px;">
+            <label for="log-limit">显示条数</label>
+            <select id="log-limit">
+                <option value="100">100</option>
+                <option value="200" selected>200</option>
+                <option value="500">500</option>
+                <option value="1000">1000</option>
+            </select>
+            <button id="btn-refresh-logs">刷新</button>
+            <button id="btn-clear-logs">清空</button>
+        </div>
+        <div id="logs-container" style="max-height: 300px; overflow: auto; border: 1px solid #ccc; border-radius: 4px; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size: 12px; background: #fafafa;"></div>
+    </section>
 </body>
 
 </html>

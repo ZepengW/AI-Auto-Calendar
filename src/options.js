@@ -72,6 +72,7 @@ async function init(){
   els.taskModalTitle = qs('taskModalTitle');
   els.task_name = qs('task_name');
   els.task_interval = qs('task_interval');
+  els.task_useInterval = qs('task_useInterval');
   els.task_calendarName = qs('task_calendarName');
   els.task_enabled = qs('task_enabled');
   els.task_url = qs('task_url');
@@ -79,14 +80,22 @@ async function init(){
   els.task_parseMode = qs('task_parseMode');
   els.task_jsonPaths = qs('task_jsonPaths');
   els.task_jsonPaths_wrap = qs('task_jsonPaths_wrap');
-  els.task_scheduleTypeRadios = Array.from(document.querySelectorAll('input[name="task_scheduleType"]'));
-  els.schedule_interval_wrap = qs('schedule_interval_wrap');
+  // new multi-trigger elements
+  els.task_useTimes = qs('task_useTimes');
   els.schedule_times_wrap = qs('schedule_times_wrap');
   els.task_times_list = qs('task_times_list');
   els.task_time_input = qs('task_time_input');
   els.task_time_add = qs('task_time_add');
+  els.task_visitTrigger = qs('task_visitTrigger');
+  els.visit_patterns_wrap = qs('visit_patterns_wrap');
+  els.task_visitPatterns = qs('task_visitPatterns');
   els.taskRunOnce = qs('taskRunOnce');
   els._editingTaskId = null;
+  // logs panel elements
+  els.logsContainer = qs('logs-container');
+  els.refreshLogs = qs('btn-refresh-logs');
+  els.clearLogs = qs('btn-clear-logs');
+  els.logLimit = qs('log-limit');
 
   const cfg = await loadSettings(); // after migration background will have moved tasks
   const mapping = {
@@ -135,11 +144,17 @@ async function init(){
   els.taskForm?.addEventListener('submit', submitTaskForm);
   els.task_parseMode?.addEventListener('change', updateTaskModalVisibility);
   els.task_mode?.addEventListener('change', updateTaskModalVisibility);
-  els.task_scheduleTypeRadios?.forEach(r=> r.addEventListener('change', updateScheduleModeVisibility));
+  els.task_useTimes?.addEventListener('change', updateScheduleModeVisibility);
+  els.task_visitTrigger?.addEventListener('change', updateVisitPatternsVisibility);
   els.task_time_add?.addEventListener('click', addTimePoint);
   els.taskRunOnce?.addEventListener('click', tryRunOnceCurrentTask);
 
   await loadRenderTasks();
+  // initial logs load
+  await refreshLogs();
+  els.refreshLogs?.addEventListener('click', refreshLogs);
+  els.clearLogs?.addEventListener('click', clearLogs);
+  els.logLimit?.addEventListener('change', refreshLogs);
 }
 
 function updateJsonPanelVisibility(){
@@ -154,9 +169,13 @@ function updateTaskModalVisibility(){
 }
 
 function updateScheduleModeVisibility(){
-  const st = (els.task_scheduleTypeRadios.find(r=> r.checked)?.value) || 'interval';
-  if(els.schedule_interval_wrap) els.schedule_interval_wrap.style.display = st==='interval' ? 'flex':'none';
-  if(els.schedule_times_wrap) els.schedule_times_wrap.style.display = st==='times' ? 'flex':'none';
+  const useTimes = !!els.task_useTimes?.checked;
+  if(els.schedule_times_wrap) els.schedule_times_wrap.style.display = useTimes ? 'flex':'none';
+}
+
+function updateVisitPatternsVisibility(){
+  const enabled = !!els.task_visitTrigger?.checked;
+  if(els.visit_patterns_wrap) els.visit_patterns_wrap.style.display = enabled ? 'flex':'none';
 }
 
 function renderTimes(times){
@@ -206,13 +225,13 @@ function renderTasks(tasks){
     li.style.gap='6px';
     li.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:600">
-        <span title="${escapeHtml(t.url)}">${escapeHtml(t.name||'未命名')}</span>
+        <span title="${escapeHtml(t.modeConfig?.url||'')}">${escapeHtml(t.name||'未命名')}</span>
         <span style="font-size:11px;font-weight:500;color:${t.enabled?'#0b6':'#999'}">${t.enabled?'启用':'停用'}</span>
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:#555">
-        <span>${t.strategy}</span>
-        <span>${t.jsonMode}</span>
-        <span>${t.interval}m</span>
+        ${t.useInterval ? `<span>间隔 ${t.intervalMinutes||t.interval||60}m</span>`:''}
+        ${(t.useTimes || t.scheduleType==='times') ? `<span>时点 ${Array.isArray(t.times)?t.times.join(', '):''}</span>`:''}
+        ${t.visitTrigger ? `<span>访问触发</span>`:''}
       </div>
       <div style="display:flex;gap:8px">
         <button data-act="run" style="flex:1;background:#0b74de;color:#fff;border:none;padding:6px 0;border-radius:6px;font-size:12px;cursor:pointer">运行</button>
@@ -243,10 +262,13 @@ function openTaskModal(task){
   els.task_mode.value = 'HTTP_GET_JSON';
   els.task_parseMode.value = (task?.modeConfig?.parseMode === 'direct') ? 'direct':'llm';
   els.task_jsonPaths.value = task?.modeConfig?.jsonPaths || task?.jsonPaths || 'data.events[*]';
-  // schedule type
-  const st = task?.scheduleType || 'interval';
-  els.task_scheduleTypeRadios.forEach(r=> r.checked = (r.value===st));
+  // multi-trigger checkboxes
+  if(els.task_useInterval) els.task_useInterval.checked = (task?.useInterval === true) || (!('useInterval' in (task||{})) && (task?.scheduleType !== 'times'));
+  if(els.task_useTimes) els.task_useTimes.checked = !!task?.useTimes || (task?.scheduleType === 'times');
+  if(els.task_visitTrigger) els.task_visitTrigger.checked = !!task?.visitTrigger;
+  if(els.task_visitPatterns) els.task_visitPatterns.value = (Array.isArray(task?.visitPatterns) ? task.visitPatterns.join('\n') : '');
   updateScheduleModeVisibility();
+  updateVisitPatternsVisibility();
   renderTimes(els._editingTimes);
   updateTaskModalVisibility();
   els.taskModal.style.display='flex';
@@ -261,15 +283,22 @@ async function submitTaskForm(ev){
   ev.preventDefault();
   const resp = await chrome.runtime.sendMessage({ type:'GET_PAGE_TASKS' });
   const tasks = (resp?.tasks)||[];
-  const scheduleType = (els.task_scheduleTypeRadios.find(r=> r.checked)?.value) || 'interval';
+  const useInterval = !!els.task_useInterval?.checked;
+  const useTimes = !!els.task_useTimes?.checked;
+  const visitTrigger = !!els.task_visitTrigger?.checked;
+  const visitPatterns = (els.task_visitPatterns?.value || '').split(/\n+/).map(s=>s.trim()).filter(Boolean);
   const data = {
     id: els._editingTaskId || ('task-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6)),
     name: els.task_name.value.trim()||'Untitled',
     calendarName: (els.task_calendarName.value.trim()|| els.task_name.value.trim() || 'Untitled'),
     enabled: els.task_enabled.value === 'true',
-    scheduleType,
-    intervalMinutes: scheduleType==='interval' ? Math.max(1, Number(els.task_interval.value)||60) : undefined,
-    times: scheduleType==='times' ? (els._editingTimes||[]) : [],
+  scheduleType: useTimes && !useInterval ? 'times' : 'interval',
+  useInterval,
+  intervalMinutes: useInterval ? Math.max(1, Number(els.task_interval.value)||60) : undefined,
+  useTimes,
+  times: useTimes ? (els._editingTimes||[]) : [],
+  visitTrigger,
+  visitPatterns,
     mode: els.task_mode.value,
     modeConfig: {
       url: els.task_url.value.trim(),
@@ -277,7 +306,7 @@ async function submitTaskForm(ev){
       parseMode: (els.task_parseMode.value === 'direct') ? 'direct':'llm',
     },
   };
-  if(scheduleType==='interval') delete data.times; else delete data.intervalMinutes;
+  if(!useTimes) delete data.times; if(!useInterval) delete data.intervalMinutes;
   const newTasks = els._editingTaskId ? tasks.map(t=> t.id===data.id? data: t) : [...tasks, data];
   await saveTasks(newTasks);
   closeTaskModal();
@@ -385,3 +414,52 @@ async function runPageParseNow(){
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+// ---------------- Logs Panel ----------------
+async function fetchLogs(limit){
+  const n = Math.max(1, Math.min(Number(limit)||200, 1000));
+  const r = await chrome.runtime.sendMessage({ type:'GET_TASK_LOGS', limit:n });
+  if(!r?.ok) throw new Error(r.error||'获取日志失败');
+  return r.logs||[];
+}
+
+function renderLogs(logs){
+  if(!els.logsContainer) return;
+  if(!Array.isArray(logs) || !logs.length){ els.logsContainer.innerHTML = '<div style="color:#666">暂无日志</div>'; return; }
+  const fmt = (ts)=> new Date(ts).toLocaleString();
+  const esc = (s)=> (s==null?'':String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;' }[c])));
+  const rows = logs.map((it)=>{
+    const base = `[${fmt(it.ts)}] [${it.type}] [${it.triggerType||'-'}] [${esc(it.taskName||it.taskId||'-')}]`;
+    if(it.type === 'trigger'){
+      return `<div>[${fmt(it.ts)}] ▶ 任务触发(${esc(it.triggerType)}) - ${esc(it.taskName||it.taskId)} ${it.info? `<span style="color:#444">${esc(JSON.stringify(it.info))}</span>`:''}</div>`;
+    } else if(it.type === 'result'){
+      const ok = it.ok === true;
+      const color = ok ? '#0b6' : '#c24d4d';
+      const tail = ok ? `成功 +${it.added||0} (总${it.total||0}) mode=${esc(it.mode||'-')}` : `失败 ${esc(it.error||'')}`;
+      return `<div>[${fmt(it.ts)}] ${ok? '✔':'✖'} <span style="color:${color}">${tail}</span> - ${esc(it.taskName||it.taskId)} <span style="color:#666">${(it.durationMs||0)}ms</span></div>`;
+    }
+    return `<div>${esc(base)}</div>`;
+  });
+  els.logsContainer.innerHTML = rows.join('');
+}
+
+async function refreshLogs(){
+  try{
+    const limit = els.logLimit?.value || 200;
+    const logs = await fetchLogs(limit);
+    renderLogs(logs);
+  }catch(e){
+    if(els.logsContainer) els.logsContainer.textContent = '获取日志失败: ' + e.message;
+  }
+}
+
+async function clearLogs(){
+  try{
+    const ok = confirm('确定清空所有日志？'); if(!ok) return;
+    const r = await chrome.runtime.sendMessage({ type:'CLEAR_TASK_LOGS' });
+    if(!r?.ok) throw new Error(r.error||'清空失败');
+    await refreshLogs();
+  }catch(e){
+    alert('清空失败: ' + e.message);
+  }
+}
