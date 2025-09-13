@@ -51,7 +51,13 @@
             <option value="">(默认 LLM 设置)</option>
           </select>
         </label>
+        <label>上传服务器
+          <select id="serverSelect" style="margin-left:6px;min-width:220px">
+            <option value="">(默认)</option>
+          </select>
+        </label>
         <button id="btnParse" class="primary">解析</button>
+        <button id="btnParseDownload" class="outline" title="解析文本并下载为 ICS">解析并下载</button>
         <button id="btnClear" class="outline">清空</button>
         <button id="btnMock" class="outline" title="插入示例">示例</button>
         <div id="parseStatus" class="muted"></div>
@@ -62,6 +68,7 @@
       <div class="hint">请选择要上传的事件，可在上传前编辑标题/地点/时间。</div>
       <div class="actions" style="margin:8px 0 10px">
         <button id="btnUpload" class="primary" disabled>上传所选事件</button>
+        <button id="btnDownloadSelected" class="outline" disabled>下载所选</button>
         <button id="btnSelectAll" class="outline">全选</button>
         <button id="btnInvert" class="outline">反选</button>
       </div>

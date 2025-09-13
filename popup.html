@@ -59,7 +59,10 @@
             <section style="background:#fff;padding:10px;border:1px solid #dbe5f0;border-radius:10px;max-width:100%">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
                     <span style="font-size:13px;font-weight:600">非结构化日程解析</span>
-                    <button id="parseLLMBtn" style="background:#0b74de;color:#fff;font-size:12px;padding:4px 10px;border:none;border-radius:6px;cursor:pointer">解析并上传</button>
+                    <div style="display:flex;gap:6px;align-items:center">
+                        <button id="parseLLMBtn" style="background:#0b74de;color:#fff;font-size:12px;padding:4px 10px;border:none;border-radius:6px;cursor:pointer">解析并上传</button>
+                        <button id="parseLLMDownloadBtn" title="仅解析并下载ICS，不上传" style="background:#fff;border:1px solid #c5d3e2;color:#0b74de;font-size:12px;padding:4px 10px;border-radius:6px;cursor:pointer">解析并下载</button>
+                    </div>
                 </div>
                 <textarea id="freeText" placeholder="粘贴待解析的自然语言日程..." style="width:100%;min-height:80px;resize:vertical;border:1px solid #c5d3e2;border-radius:6px;padding:6px;font-size:12px;font-family:system-ui"></textarea>
                 <div id="freeTextStatus" style="font-size:11px;color:#666;margin-top:4px"></div>

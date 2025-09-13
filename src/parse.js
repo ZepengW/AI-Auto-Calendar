@@ -1,4 +1,4 @@
-import { loadSettings, DEFAULTS, parseLLMTime } from './shared.js';
+import { loadSettings, DEFAULTS, parseLLMTime, isoToICSTime, escapeICSText } from './shared.js';
 
 function qs(id){ return document.getElementById(id); }
 function ce(tag, props={}){ const el=document.createElement(tag); Object.assign(el, props); return el; }
@@ -67,6 +67,7 @@ function updateUploadButton(){
   const sel = collectSelected();
   const btn = qs('btnUpload');
   if(btn) btn.disabled = !sel.length;
+  const btnD = qs('btnDownloadSelected'); if(btnD) btnD.disabled = !sel.length;
 }
 
 function attachTableEvents(){
@@ -96,7 +97,8 @@ async function uploadSelected(){
       startTime: parseLLMTime(ev.startTime),
       endTime: parseLLMTime(ev.endTime)
     }));
-    const res = await chrome.runtime.sendMessage({ type:'UPLOAD_EVENTS', events: normalized });
+    const serverId = (qs('serverSelect')?.value || '').trim();
+    const res = await chrome.runtime.sendMessage({ type:'UPLOAD_EVENTS', events: normalized, serverId: serverId || undefined });
     if(!res?.ok) throw new Error(res?.error || '上传失败');
     setUploadStatus('上传成功：'+ normalized.length +' 条','success-box');
   } catch(e){
@@ -104,13 +106,82 @@ async function uploadSelected(){
   }
 }
 
+// ---- Download helpers (ICS) ----
+function buildICS(events, calendarName='LLM-Parsed'){
+  const now = new Date();
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//SJTU-Auto-Calendar//EN',
+    `X-WR-CALNAME:${escapeICSText(calendarName)}`,
+    'X-WR-TIMEZONE:UTC',
+  ];
+  for(const ev of events){
+    try{
+      const s = parseLLMTime(ev.startTime) || parseLLMTime(ev.startTimeRaw) || ev.startTime || ev.startTimeRaw;
+      const e = parseLLMTime(ev.endTime) || parseLLMTime(ev.endTimeRaw) || ev.endTime || ev.endTimeRaw;
+      if(!s || !e || !ev.title) continue;
+      const sd = s instanceof Date ? s : new Date(s);
+      const ed = e instanceof Date ? e : new Date(e);
+      if(!(sd instanceof Date) || isNaN(sd) || !(ed instanceof Date) || isNaN(ed)) continue;
+      lines.push('BEGIN:VEVENT');
+      const uid = ev.eventId || ev.id || 'evt-' + Math.random().toString(36).slice(2);
+      lines.push(`UID:${uid}`);
+      lines.push(`DTSTAMP:${isoToICSTime(now)}`);
+      lines.push(`DTSTART:${isoToICSTime(sd)}`);
+      lines.push(`DTEND:${isoToICSTime(ed)}`);
+      lines.push(`SUMMARY:${escapeICSText(ev.title)}`);
+      if(ev.location) lines.push(`LOCATION:${escapeICSText(ev.location)}`);
+      if(ev.description) lines.push(`DESCRIPTION:${escapeICSText(String(ev.description))}`);
+      lines.push('END:VEVENT');
+    }catch(_){ /* ignore bad row */ }
+  }
+  lines.push('END:VCALENDAR');
+  return lines.join('\r\n');
+}
+
+function downloadText(filename, text){
+  const blob = new Blob([text], { type:'text/calendar;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.style.display='none';
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1000);
+}
+
+async function parseAndDownload(){
+  try{
+    const raw = (qs('rawInput')?.value||'').trim();
+    if(!raw){ showMessage('请输入文本','error'); return; }
+    await parseLLM(raw); // fills currentEvents & renders
+    const idxs = collectSelected();
+    const picked = idxs.length ? idxs.map(i=> currentEvents[i]) : currentEvents.slice();
+    if(!picked.length){ showMessage('没有可下载的事件','error'); return; }
+    const ics = buildICS(picked, 'LLM-Parsed');
+    downloadText('LLM-Parsed.ics', ics);
+    showMessage('已生成并下载 ICS','success');
+  }catch(e){ showMessage('解析或下载失败: ' + e.message, 'error'); }
+}
+
+function downloadSelected(){
+  const idxs = collectSelected();
+  if(!idxs.length){ setUploadStatus('未选择事件','error-box'); return; }
+  const picked = idxs.map(i=> currentEvents[i]);
+  const ics = buildICS(picked, 'LLM-Parsed');
+  downloadText('LLM-Parsed-selected.ics', ics);
+}
+
 function bind(){
   qs('btnParse').addEventListener('click', ()=>parseLLM(qs('rawInput').value));
+  const bpd = qs('btnParseDownload'); if(bpd) bpd.addEventListener('click', parseAndDownload);
   qs('btnClear').addEventListener('click', ()=>{ qs('rawInput').value=''; setStatus(''); });
   qs('btnMock').addEventListener('click', ()=>{
-    qs('rawInput').value = `明天下午3点-5点在软件学院220会议室开AI项目评审会\n9月18日全天 外聘专家对接\n每周三 9:00-10:00 组会（连续四周）`;
+    qs('rawInput').value = `明天下午3点-5点在软件学院220会议室开AI项目评审会
+9月18日全天 外聘专家对接
+每周三 9:00-10:00 组会（连续四周）`;
   });
   qs('btnUpload').addEventListener('click', uploadSelected);
+  const bds = qs('btnDownloadSelected'); if(bds) bds.addEventListener('click', downloadSelected);
   qs('btnSelectAll').addEventListener('click', ()=>{ document.querySelectorAll('.rowChk').forEach(c=>c.checked=true); updateUploadButton(); });
   qs('btnInvert').addEventListener('click', ()=>{ document.querySelectorAll('.rowChk').forEach(c=>c.checked=!c.checked); updateUploadButton(); });
   qs('openOptions').addEventListener('click', ()=>{ chrome.runtime.openOptionsPage ? chrome.runtime.openOptionsPage() : window.open('options.html'); });
@@ -128,6 +199,21 @@ function bind(){
         sel.innerHTML = '<option value="">(默认 LLM 设置)</option>';
         for(const p of list){
           const o = document.createElement('option'); o.value=p.id; o.textContent = `${p.name} (${p.type})`;
+          sel.appendChild(o);
+        }
+      }
+    } catch(_){ /* ignore */ }
+  })();
+  // Load servers
+  (async () => {
+    try {
+      const r = await chrome.runtime.sendMessage({ type:'GET_SERVERS' });
+      const list = r?.ok ? (r.servers||[]) : [];
+      const sel = qs('serverSelect');
+      if(sel){
+        sel.innerHTML = '<option value="">(默认)</option>';
+        for(const s of list){
+          const o = document.createElement('option'); o.value=s.id; o.textContent = `${s.name} (${s.type})`;
           sel.appendChild(o);
         }
       }

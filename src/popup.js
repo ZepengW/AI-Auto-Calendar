@@ -1,4 +1,5 @@
-// Popup script with multi-task management & free text LLM parse
+// Popup script with multi-task management & free text LLM parse + download
+import { isoToICSTime, escapeICSText, parseLLMTime } from './shared.js';
 function qs(id){ return document.getElementById(id); }
 
 function openOptions(hash){
@@ -90,6 +91,7 @@ async function init(){
   renderTasks(tasks);
   qs('addTask')?.addEventListener('click', ()=> openAddDialog());
   qs('parseLLMBtn')?.addEventListener('click', parseFreeText);
+  qs('parseLLMDownloadBtn')?.addEventListener('click', parseAndDownloadFreeText);
 }
 
 async function parseFreeText(){
@@ -105,6 +107,68 @@ async function parseFreeText(){
   } catch(e){
     status.textContent = '失败: '+ e.message;
   }
+}
+
+function buildICS(events, calendarName='LLM-Parsed'){
+  const now = new Date();
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//SJTU-Auto-Calendar//EN',
+    `X-WR-CALNAME:${escapeICSText(calendarName)}`,
+    'X-WR-TIMEZONE:UTC',
+  ];
+  for(const ev of events){
+    try{
+      const s = parseLLMTime(ev.startTime) || parseLLMTime(ev.startTimeRaw) || ev.startTime || ev.startTimeRaw;
+      const e = parseLLMTime(ev.endTime) || parseLLMTime(ev.endTimeRaw) || ev.endTime || ev.endTimeRaw;
+      if(!s || !e || !ev.title) continue;
+      const sd = s instanceof Date ? s : new Date(s);
+      const ed = e instanceof Date ? e : new Date(e);
+      if(!(sd instanceof Date) || isNaN(sd) || !(ed instanceof Date) || isNaN(ed)) continue;
+      const uid = ev.eventId || ev.id || 'evt-' + Math.random().toString(36).slice(2);
+      const linesEv = [
+        'BEGIN:VEVENT',
+        `UID:${uid}`,
+        `DTSTAMP:${isoToICSTime(now)}`,
+        `DTSTART:${isoToICSTime(sd)}`,
+        `DTEND:${isoToICSTime(ed)}`,
+        `SUMMARY:${escapeICSText(ev.title)}`,
+      ];
+      if(ev.location) linesEv.push(`LOCATION:${escapeICSText(ev.location)}`);
+      if(ev.description) linesEv.push(`DESCRIPTION:${escapeICSText(String(ev.description))}`);
+      linesEv.push('END:VEVENT');
+      lines.push(...linesEv);
+    }catch(_){ /* ignore bad row */ }
+  }
+  lines.push('END:VCALENDAR');
+  return lines.join('\r\n');
+}
+
+function downloadText(filename, text){
+  const blob = new Blob([text], { type:'text/calendar;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.style.display='none';
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(url); a.remove(); }, 1000);
+}
+
+async function parseAndDownloadFreeText(){
+  const area = qs('freeText');
+  const status = qs('freeTextStatus');
+  const raw = (area?.value||'').trim();
+  if(!raw){ status.textContent='请输入文本'; return; }
+  status.textContent='解析中...';
+  try{
+    const resp = await chrome.runtime.sendMessage({ type:'PARSE_LLM_ONLY', text: raw });
+    if(!resp?.ok) throw new Error(resp.error||'后台失败');
+    const events = Array.isArray(resp.events) ? resp.events : [];
+    if(!events.length){ status.textContent='未解析到事件'; return; }
+    const ics = buildICS(events, 'LLM-Parsed');
+    downloadText('LLM-Parsed.ics', ics);
+    status.textContent = `已下载 ICS，事件 ${events.length}`;
+  }catch(e){ status.textContent = '失败: ' + e.message; }
 }
 
 document.addEventListener('DOMContentLoaded', init);
