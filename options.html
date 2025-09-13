@@ -1,17 +1,32 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head></head>
+<head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>SJTU Auto Calendar 设置</title>
     <style>
+        :root {
+            --brand: #0b74de;
+            --bg: #f6f8fb;
+            --card: #ffffff;
+            --border: #e6edf5;
+            --text: #0f172a;
+            --muted: #64748b;
+        }
+        html, body { height: 100%; }
+        body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif; color: var(--text); background: var(--bg); }
+        .container { max-width: 980px; margin: 0 auto; padding: 18px 16px 40px; }
+        .page-header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom: 14px; }
+        .page-title { display:flex; align-items:center; gap:10px; margin:0; font-size: 22px; letter-spacing:.3px; }
+        .subtle { color: var(--muted); }
+    .header-actions { display:flex; align-items:center; gap:10px; flex-wrap: wrap; }
         /* Constrain modals and allow scrolling when content is tall */
         .cal-modal-overlay { overflow: auto; }
         .cal-modal { max-height: calc(100vh - 120px); overflow: auto; }
         fieldset {
             padding: 16px 20px;
             border-radius: 14px;
-            background: #fff;
+            background: var(--card);
             margin-bottom: 20px
         }
 
@@ -53,7 +68,7 @@
         }
 
         button.primary {
-            background: #0b74de;
+            background: var(--brand);
             color: #fff
         }
 
@@ -61,6 +76,9 @@
             background: #fff;
             border: 1px solid #d4dbe6
         }
+
+        /* unified small button size */
+        .sm { padding: 6px 12px; font-size: 12px; border-radius: 8px; }
 
         .actions {
             display: flex;
@@ -78,76 +96,74 @@
 
         .badge {
             display: inline-block;
-            background: #0b74de;
+            background: var(--brand);
             color: #fff;
             padding: 2px 8px;
             border-radius: 20px;
             font-size: 12px;
             margin-left: 8px
         }
+        .card { border:1px solid var(--border); border-radius: 12px; background: var(--card); padding: 10px 12px; }
+        .card-head { display:flex; align-items:center; justify-content:flex-end; gap:8px; margin-bottom: 6px; }
+        .grid { display:grid; grid-template-columns: 1fr; gap: 16px; }
+        @media (min-width: 860px) { .grid { grid-template-columns: 1fr 1fr; } }
     </style>
     
 </head>
 
 <body>
-    <h1>SJTU Auto Calendar 设置 <span class="badge">v0.1.0</span></h1>
+    <div class="container">
+        <div class="page-header">
+            <h1 class="page-title">SJTU Auto Calendar 设置 <span class="badge">v0.1.0</span></h1>
+            <div class="header-actions">
+                <button id="save" class="primary">保存</button>
+                <button id="btnAuthorizeAll" class="ghost" title="为当前配置的一切地址一次性申请权限">一键授权</button>
+            </div>
+        </div>
 
-    <!-- 权限提示栏（缺少可选 host 权限时显示） -->
-    <div id="permBanner" style="display:none;margin:12px 0;padding:10px 12px;border:1px dashed #eab308;background:#fffbeb;border-radius:10px;color:#854d0e;font-size:13px">
-        发现有新配置的服务器或解析服务需要访问权限。为保证正常联网，请点击
-        <button id="btnAuthorizeMissing" class="primary" style="padding:6px 10px;margin:0 6px">立即授权</button>
-        ，或在列表中针对单个节点点击“授权”。
-    </div>
+        <!-- 权限提示栏（缺少可选 host 权限时显示） -->
+        <div id="permBanner" style="display:none;margin:12px 0;padding:10px 12px;border:1px dashed #eab308;background:#fffbeb;border-radius:10px;color:#854d0e;font-size:13px">
+            发现有新配置的服务器或解析服务需要访问权限。为保证正常联网，请点击
+            <button id="btnAuthorizeMissing" class="primary sm" style="margin:0 6px">立即授权</button>
+            。
+        </div>
     
-    <fieldset>
-        <legend>日历服务器节点（可配置多套）</legend>
-        <div style="margin-bottom:10px;padding:8px 10px;border:1px solid #d4dbe6;border-radius:10px;background:#fff">
-            <div style="font-size:13px;font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:8px">
-                服务器节点
-                <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
-                    <button id="authorizeAllServers" type="button" class="ghost" style="border:1px solid #c5d3e2">授权全部</button>
-                    <button id="addServer" type="button" style="background:#0b74de;color:#fff;border:none;padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer">新增</button>
+        <fieldset>
+            <legend>上传节点（日历服务器）</legend>
+            <div class="card">
+                <div class="card-head">
+                    <button id="addServer" type="button" class="primary sm">新增</button>
+                </div>
+                <div id="serversEmpty" style="font-size:12px;color:#666">暂无服务器节点，点击“新增”创建。</div>
+                <ul id="serverList" style="list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:8px"></ul>
+                <div style="margin-top:8px;font-size:13px">默认服务器：
+                    <select id="defaultServerSelect" style="min-width:200px"></select>
                 </div>
             </div>
-            <div id="serversEmpty" style="font-size:12px;color:#666">暂无服务器节点，点击“新增”创建。</div>
-            <ul id="serverList" style="list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:8px"></ul>
-            <div style="margin-top:8px;font-size:13px">默认服务器：
-                <select id="defaultServerSelect" style="min-width:200px"></select>
-            </div>
-        </div>
-    </fieldset>
+        </fieldset>
     
-    <fieldset>
-        <legend>解析节点（可配置多套）</legend>
-        <div style="margin-bottom:10px;padding:8px 10px;border:1px solid #d4dbe6;border-radius:10px;background:#fff">
-            <div style="font-size:13px;font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:8px">
-                解析节点
-                <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
-                    <button id="authorizeAllParsers" type="button" class="ghost" style="border:1px solid #c5d3e2">授权全部</button>
-                    <button id="addParser" type="button" style="background:#0b74de;color:#fff;border:none;padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer">新增</button>
+        <fieldset>
+            <legend>解析节点</legend>
+            <div class="card">
+                <div class="card-head">
+                    <button id="addParser" type="button" class="primary sm">新增</button>
                 </div>
+                <div id="parsersEmpty" style="font-size:12px;color:#666">暂无解析节点，点击“新增”创建。</div>
+                <ul id="parserList" style="list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:8px"></ul>
             </div>
-            <div id="parsersEmpty" style="font-size:12px;color:#666">暂无解析节点，点击“新增”创建。</div>
-            <ul id="parserList" style="list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:8px"></ul>
-        </div>
-    </fieldset>
+        </fieldset>
     <fieldset>
-        <legend>页面定时解析 (多任务 V3)</legend>
-        <div style="margin-bottom:10px;padding:8px 10px;border:1px solid #d4dbe6;border-radius:10px;background:#fff">
-            <div style="font-size:13px;font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:8px">
-                任务列表 <button id="addPageTask" type="button" style="margin-left:auto;background:#0b74de;color:#fff;border:none;padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer">新增任务</button>
+        <legend>任务列表</legend>
+        <div class="card">
+            <div class="card-head">
+                <button id="runAllTasks" type="button" class="ghost sm" title="运行所有已启用的任务">运行所有任务</button>
+                <button id="addPageTask" type="button" class="primary sm">新增任务</button>
             </div>
             <div id="pageTasksEmpty" style="font-size:12px;color:#666">暂无任务，点击“新增任务”创建。</div>
             <ul id="pageTaskList" style="list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:8px"></ul>
         </div>
-        <div style="font-size:11px;color:#666">旧版单任务配置已移除，所有调度请使用上方列表。</div>
     </fieldset>
-    <fieldset>
-        <legend>操作</legend>
-        <div class="actions"><button id="save" class="primary">保存</button> <button id="syncNow"
-                class="ghost">立即同步</button></div>
-        <div style="margin-top:10px;font-size:13px">最后同步: <span id="lastSync">n/a</span></div>
-    </fieldset>
+    <!-- 操作区合并到页头；去除“立即同步”和“最后同步”显示 -->
     <script type="module" src="src/options.js"></script>
 
         <!-- 新版任务编辑模态 (V3) -->
@@ -310,23 +326,24 @@ https://calendar.sjtu.edu.cn/..."></textarea>
             </div>
         </div>
 
-    <!-- 任务日志面板 -->
-    <hr>
-    <section id="logs-section" style="margin-top: 16px;">
-        <h2 style="margin: 8px 0;">任务日志</h2>
-        <div style="display:flex; align-items:center; gap:8px; flex-wrap: wrap; margin-bottom: 8px;">
-            <label for="log-limit">显示条数</label>
-            <select id="log-limit">
-                <option value="100">100</option>
-                <option value="200" selected>200</option>
-                <option value="500">500</option>
-                <option value="1000">1000</option>
-            </select>
-            <button id="btn-refresh-logs">刷新</button>
-            <button id="btn-clear-logs">清空</button>
-        </div>
-        <div id="logs-container" style="max-height: 300px; overflow: auto; border: 1px solid #ccc; border-radius: 4px; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size: 12px; background: #fafafa;"></div>
-    </section>
+        <!-- 任务日志面板 -->
+        <hr>
+        <section id="logs-section" style="margin-top: 16px;">
+            <h2 style="margin: 8px 0;">任务日志</h2>
+            <div style="display:flex; align-items:center; gap:8px; flex-wrap: wrap; margin-bottom: 8px;">
+                <label for="log-limit">显示条数</label>
+                <select id="log-limit">
+                    <option value="100">100</option>
+                    <option value="200" selected>200</option>
+                    <option value="500">500</option>
+                    <option value="1000">1000</option>
+                </select>
+                <button id="btn-refresh-logs">刷新</button>
+                <button id="btn-clear-logs">清空</button>
+            </div>
+            <div id="logs-container" style="max-height: 300px; overflow: auto; border: 1px solid #ccc; border-radius: 4px; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size: 12px; background: #fafafa;"></div>
+        </section>
+    </div>
 </body>
 
 </html>

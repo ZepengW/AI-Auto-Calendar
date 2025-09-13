@@ -20,9 +20,9 @@ function fillProvider(){ /* removed global provider config */ }
 async function init(){
   // map elements
   // removed global Radicale/LLM settings; now managed via nodes
-  els.lastSync = qs('lastSync');
+  els.lastSync = qs('lastSync'); // removed in UI, keep null-safe
   els.saveBtn = qs('save');
-  els.syncNow = qs('syncNow');
+  els.syncNow = qs('syncNow'); // removed in UI, keep null-safe
   // legacy single-task elements (to be removed); keep null-safe usage
   els.pageParseUrl = qs('pageParseUrl');
   els.pageParseInterval = qs('pageParseInterval');
@@ -38,11 +38,12 @@ async function init(){
   els.pageTaskList = qs('pageTaskList');
   els.pageTasksEmpty = qs('pageTasksEmpty');
   els.addPageTask = qs('addPageTask');
+  els.runAllTasks = qs('runAllTasks');
   // parsers UI
   els.parserList = qs('parserList');
   els.parsersEmpty = qs('parsersEmpty');
   els.addParser = qs('addParser');
-  els.authorizeAllParsers = qs('authorizeAllParsers');
+  // removed per-section authorize
   els.parserModal = qs('parserModal');
   els.parserForm = qs('parserForm');
   els.parserModalTitle = qs('parserModalTitle');
@@ -71,7 +72,7 @@ async function init(){
   els.serverList = qs('serverList');
   els.serversEmpty = qs('serversEmpty');
   els.addServer = qs('addServer');
-  els.authorizeAllServers = qs('authorizeAllServers');
+  // removed per-section authorize
   els.defaultServerSelect = qs('defaultServerSelect');
   els.serverModal = qs('serverModal');
   els.serverForm = qs('serverForm');
@@ -119,10 +120,11 @@ async function init(){
   // permissions banner
   els.permBanner = qs('permBanner');
   els.btnAuthorizeMissing = qs('btnAuthorizeMissing');
+  els.btnAuthorizeAll = qs('btnAuthorizeAll');
 
   const cfg = await loadSettings();
   if(els.pageParseEnabled) els.pageParseEnabled.value = cfg.pageParseEnabled ? 'true':'false';
-  if(els.lastSync) els.lastSync.textContent = cfg.lastSync ? new Date(cfg.lastSync).toLocaleString() : 'n/a';
+  // lastSync removed from UI
   if(els.pageParseStrategy) els.pageParseStrategy.value = cfg.pageParseStrategy || 'fetch';
   if(els.pageParseJsonPaths) els.pageParseJsonPaths.value = cfg.pageParseJsonPaths || DEFAULTS.pageParseJsonPaths;
   if(els.pageParseJsonModeRadios){
@@ -133,19 +135,18 @@ async function init(){
   fillProvider();
 
   els.saveBtn?.addEventListener('click', saveAll);
-  els.syncNow?.addEventListener('click', () => chrome.runtime.sendMessage({ type: 'SYNC_NOW' }));
+  // syncNow removed (each task can run individually)
   els.pageParseRun?.addEventListener('click', ()=> alert('旧版单任务即将移除，请使用上方多任务')); // deprecate
   els.pageParseStrategy?.addEventListener('change', updateJsonPanelVisibility);
   els.pageParseJsonModeRadios?.forEach(r => r.addEventListener('change', ()=>{}));
   // multi task events
   els.addPageTask?.addEventListener('click', ()=> openTaskModal());
+  els.runAllTasks?.addEventListener('click', runAllEnabledTasks);
   els.addParser?.addEventListener('click', ()=> openParserModal());
-  els.authorizeAllParsers?.addEventListener('click', authorizeAllParsers);
   els.closeParserModal?.addEventListener('click', closeParserModal);
   els.parserForm?.addEventListener('submit', submitParserForm);
   els.parser_type?.addEventListener('change', onParserTypeChange);
   els.addServer?.addEventListener('click', ()=> openServerModal());
-  els.authorizeAllServers?.addEventListener('click', authorizeAllServers);
   els.closeServerModal?.addEventListener('click', closeServerModal);
   els.serverForm?.addEventListener('submit', submitServerForm);
   els.defaultServerSelect?.addEventListener('change', saveDefaultServerSelection);
@@ -163,6 +164,7 @@ async function init(){
   // permissions check after lists are loaded
   await checkAndTogglePermBanner();
   els.btnAuthorizeMissing?.addEventListener('click', authorizeMissing);
+  els.btnAuthorizeAll?.addEventListener('click', authorizeAll);
   // initial logs load
   await refreshLogs();
   els.refreshLogs?.addEventListener('click', refreshLogs);
@@ -359,6 +361,20 @@ async function runTask(id, btn){
   }
 }
 
+async function runAllEnabledTasks(){
+  try{
+    const resp = await chrome.runtime.sendMessage({ type:'GET_PAGE_TASKS' });
+    const tasks = (resp?.tasks)||[];
+    const enabled = tasks.filter(t=> t.enabled);
+    if(!enabled.length){ alert('当前没有启用的任务'); return; }
+    // 顺序触发，避免并发对权限/服务造成瞬时压力
+    for(const t of enabled){
+      try { await chrome.runtime.sendMessage({ type:'RUN_PAGE_TASK', id: t.id }); } catch(_){ /* 单个失败忽略 */ }
+    }
+    alert('已触发所有启用任务');
+  }catch(e){ alert('批量运行失败: ' + e.message); }
+}
+
 async function tryRunOnceCurrentTask(){
   if(!els._editingTaskId){ alert('请先保存任务后运行'); return; }
   const btn = els.taskRunOnce;
@@ -497,11 +513,9 @@ function renderParsers(parsers){
         <span style="font-size:11px;color:#555">${escapeHtml(p.type||'')}</span>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button data-act="auth" style="background:#fff;border:1px solid #c5d3e2;border-radius:6px;padding:6px 8px;font-size:12px;cursor:pointer">授权</button>
         <button data-act="edit" style="flex:1;background:#fff;border:1px solid #c5d3e2;border-radius:6px;padding:6px 0;font-size:12px;cursor:pointer">编辑</button>
         <button data-act="del" style="flex:1;background:#fff;border:1px solid #f0b6b6;color:#c24d4d;border-radius:6px;padding:6px 0;font-size:12px;cursor:pointer">删除</button>
       </div>`;
-  li.querySelector('[data-act=auth]').addEventListener('click', async ()=> { await requestParserPermissions(p); await checkAndTogglePermBanner(); });
     li.querySelector('[data-act=edit]').addEventListener('click', ()=> openParserModal(p, parsers));
     li.querySelector('[data-act=del]').addEventListener('click', async ()=>{
       const list = parsers.filter(x=> x.id !== p.id);
@@ -650,11 +664,9 @@ function renderServers(servers){
         <span style="font-size:11px;color:#555">${escapeHtml(s.type||'')}</span>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button data-act="auth" style="background:#fff;border:1px solid #c5d3e2;border-radius:6px;padding:6px 8px;font-size:12px;cursor:pointer">授权</button>
         <button data-act="edit" style="flex:1;background:#fff;border:1px solid #c5d3e2;border-radius:6px;padding:6px 0;font-size:12px;cursor:pointer">编辑</button>
         <button data-act="del" style="flex:1;background:#fff;border:1px solid #f0b6b6;color:#c24d4d;border-radius:6px;padding:6px 0;font-size:12px;cursor:pointer">删除</button>
       </div>`;
-  li.querySelector('[data-act=auth]').addEventListener('click', async ()=> { await requestServerPermissions(s); await checkAndTogglePermBanner(); });
     li.querySelector('[data-act=edit]').addEventListener('click', ()=> openServerModal(s, servers));
     li.querySelector('[data-act=del]').addEventListener('click', async ()=>{
       const list = servers.filter(x=> x.id !== s.id);
@@ -737,6 +749,19 @@ async function authorizeMissing(){
   }catch(e){ alert('授权失败: '+ e.message); }
 }
 
+// Global one-click authorization: gather all needed origins across servers/parsers and request once
+async function authorizeAll(){
+  try{
+    const [servers, parsers] = await Promise.all([loadServers(), loadParsers()]);
+    const origins = [
+      ...servers.flatMap(buildOriginsForServer),
+      ...parsers.flatMap(buildOriginsForParser)
+    ];
+    const res = await ensureHostPermissions(origins, false);
+    if(res.ok){ await checkAndTogglePermBanner(); if(res.granted){ alert('已申请所需站点权限'); } }
+  }catch(e){ alert('授权失败: ' + e.message); }
+}
+
 // ---------------- Dynamic host permission helpers ----------------
 function buildOriginsFromUrl(u){
   try{
@@ -785,19 +810,9 @@ async function requestParserPermissions(parser, opts){
 }
 
 async function authorizeAllServers(){
-  try{
-    const servers = await loadServers();
-    const all = servers.flatMap(buildOriginsForServer);
-    const res = await ensureHostPermissions(all, false);
-    if(res.ok && res.granted){ alert('服务器地址授权完成'); }
-  }catch(e){ alert('批量授权失败: '+ e.message); }
+  // deprecated by global authorizeAll
 }
 
 async function authorizeAllParsers(){
-  try{
-    const parsers = await loadParsers();
-    const all = parsers.flatMap(buildOriginsForParser);
-    const res = await ensureHostPermissions(all, false);
-    if(res.ok && res.granted){ alert('解析服务地址授权完成'); }
-  }catch(e){ alert('批量授权失败: '+ e.message); }
+  // deprecated by global authorizeAll
 }
