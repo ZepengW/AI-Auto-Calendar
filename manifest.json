@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "SJTU Auto Calendar",
-  "description": "自动获取并解析 SJTU 校历事件，上传到 Radicale，并支持选中文本 LLM 解析。",
+  "name": "AI Auto Calendar",
+  "description": "一体化的非结构化信息抓取-解析-同步日历插件：支持通过 HTTP 自动获取日程、调用大模型或 JSON 映射进行结构化解析，并将事件同步到多种日历服务器（如 Radicale、Google 日历）。",
   "version": "0.1.0",
   "icons": {"16":"icons/icon.png","48":"icons/icon.png","128":"icons/icon.png"},
   "permissions": [
@@ -37,7 +37,7 @@
   ],
   "background": {"service_worker": "src/background.js", "type":"module"},
   "options_page": "options.html",
-  "action": { "default_title": "SJTU Calendar", "default_popup": "popup.html" }
+  "action": { "default_title": "AI Auto Calendar", "default_popup": "popup.html" }
   ,"commands": {
     "parse-selection": {
       "suggested_key": { "default": "Ctrl+Shift+P" },

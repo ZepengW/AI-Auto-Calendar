@@ -328,7 +328,7 @@ function notifyAll(text) {
   chrome.notifications?.create({
     type: 'basic',
     iconUrl: iconPath,
-    title: 'SJTU Auto Calendar',
+    title: 'AI Auto Calendar',
     message: text.substring(0, 180),
   });
   chrome.runtime.sendMessage({ type: 'SJTU_CAL_TOAST', text }).catch(() => {});
