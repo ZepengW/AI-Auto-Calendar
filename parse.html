@@ -46,7 +46,12 @@
       <div class="hint">输入任意自然语言/半结构化文本（可包含多条）。示例：<br/>明天 15:00-16:30 在软件学院 220 会议室开 AI 项目评审会；9月18日全天 外聘专家对接；每周三 9:00-10:00 组会（持续四周）。</div>
       <textarea id="rawInput" placeholder="在此粘贴或输入要解析的文本，可多行"></textarea>
       <div class="toolbar">
-        <button id="btnParse" class="primary">调用 LLM 解析</button>
+        <label>解析节点
+          <select id="parserSelect" style="margin-left:6px;min-width:220px">
+            <option value="">(默认 LLM 设置)</option>
+          </select>
+        </label>
+        <button id="btnParse" class="primary">解析</button>
         <button id="btnClear" class="outline">清空</button>
         <button id="btnMock" class="outline" title="插入示例">示例</button>
         <div id="parseStatus" class="muted"></div>

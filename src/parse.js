@@ -15,7 +15,15 @@ async function parseLLM(raw){
   setStatus('解析中…');
   qs('btnParse').disabled = true;
   try {
-    const res = await chrome.runtime.sendMessage({ type:'PARSE_LLM_ONLY', text });
+    const parserId = (qs('parserSelect')?.value || '').trim();
+    let res;
+    if(parserId){
+      const r = await chrome.runtime.sendMessage({ type:'PARSE_TEXT_WITH_PARSER', parserId, text });
+      if(!r?.ok) throw new Error(r?.error||'解析失败');
+      res = { ok:true, events: r.events };
+    } else {
+      res = await chrome.runtime.sendMessage({ type:'PARSE_LLM_ONLY', text });
+    }
     if(!res?.ok) throw new Error(res?.error || '解析失败');
     currentEvents = res.events || [];
     renderEvents();
@@ -110,6 +118,21 @@ function bind(){
   document.addEventListener('keydown', (e)=>{
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='enter'){ parseLLM(qs('rawInput').value); }
   });
+  // Load parsers
+  (async () => {
+    try {
+      const r = await chrome.runtime.sendMessage({ type:'GET_PARSERS' });
+      const list = r?.ok ? (r.parsers||[]) : [];
+      const sel = qs('parserSelect');
+      if(sel){
+        sel.innerHTML = '<option value="">(默认 LLM 设置)</option>';
+        for(const p of list){
+          const o = document.createElement('option'); o.value=p.id; o.textContent = `${p.name} (${p.type})`;
+          sel.appendChild(o);
+        }
+      }
+    } catch(_){ /* ignore */ }
+  })();
 }
 
 bind();

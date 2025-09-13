@@ -2,13 +2,6 @@
 import { loadSettings, saveSettings, DEFAULTS } from './shared.js';
 
 const els = {
-  radicalBase: null,
-  radicalUsername: null,
-  radicalAuth: null,
-  autoSyncMinutes: null,
-  dateWindowDays: null,
-  enableNotifications: null,
-  llmProvider: null,
   lastSync: null,
   saveBtn: null,
   syncNow: null,
@@ -22,31 +15,11 @@ const els = {
 
 function qs(id){ return document.getElementById(id); }
 
-function fillProvider(cfg){
-  const wrap = qs('providerConfig');
-  if(!wrap) return;
-  if(cfg.llmProvider === 'zhipu_agent'){
-    wrap.innerHTML = `
-      <div class="row">
-        <label style="flex:1">Agent ID<input id="llmAgentId" type="text" value="${cfg.llmAgentId || ''}"></label>
-        <label style="flex:1">API URL<input id="llmApiUrl" type="text" value="${cfg.llmApiUrl || DEFAULTS.llmApiUrl}"></label>
-      </div>
-      <label>API Key<input id="llmApiKey" type="text" value="${cfg.llmApiKey || ''}"></label>
-      <div class="note">使用 智谱 智能体接口 app_id=Agent ID。</div>`;
-  } else {
-    wrap.innerHTML = '<p>尚未支持该 Provider</p>';
-  }
-}
+function fillProvider(){ /* removed global provider config */ }
 
 async function init(){
   // map elements
-  els.radicalBase = qs('radicalBase');
-  els.radicalUsername = qs('radicalUsername');
-  els.radicalAuth = qs('radicalAuth');
-  els.autoSyncMinutes = qs('autoSyncMinutes');
-  els.dateWindowDays = qs('dateWindowDays');
-  els.enableNotifications = qs('enableNotifications');
-  els.llmProvider = qs('llmProvider');
+  // removed global Radicale/LLM settings; now managed via nodes
   els.lastSync = qs('lastSync');
   els.saveBtn = qs('save');
   els.syncNow = qs('syncNow');
@@ -65,6 +38,52 @@ async function init(){
   els.pageTaskList = qs('pageTaskList');
   els.pageTasksEmpty = qs('pageTasksEmpty');
   els.addPageTask = qs('addPageTask');
+  // parsers UI
+  els.parserList = qs('parserList');
+  els.parsersEmpty = qs('parsersEmpty');
+  els.addParser = qs('addParser');
+  els.authorizeAllParsers = qs('authorizeAllParsers');
+  els.parserModal = qs('parserModal');
+  els.parserForm = qs('parserForm');
+  els.parserModalTitle = qs('parserModalTitle');
+  els.parser_name = qs('parser_name');
+  els.parser_type = qs('parser_type');
+  // parser typed fields
+  els.p_zhipu_apiUrl = qs('p_zhipu_apiUrl');
+  els.p_zhipu_apiKey = qs('p_zhipu_apiKey');
+  els.p_zhipu_agentId = qs('p_zhipu_agentId');
+  // removed: prompt/jsonPaths for zhipu node
+  els.p_json_map_title = qs('p_json_map_title');
+  els.p_json_map_location = qs('p_json_map_location');
+  els.p_json_map_startTime = qs('p_json_map_startTime');
+  els.p_json_map_endTime = qs('p_json_map_endTime');
+  els.p_json_map_uid = qs('p_json_map_uid');
+  els.p_json_map_description = qs('p_json_map_description');
+  els.p_json_def_title = qs('p_json_def_title');
+  els.p_json_def_location = qs('p_json_def_location');
+  els.p_json_def_startTime = qs('p_json_def_startTime');
+  els.p_json_def_endTime = qs('p_json_def_endTime');
+  els.p_json_def_uid = qs('p_json_def_uid');
+  els.p_json_def_description = qs('p_json_def_description');
+  els.closeParserModal = qs('closeParserModal');
+  els._editingParserId = null;
+  // servers UI
+  els.serverList = qs('serverList');
+  els.serversEmpty = qs('serversEmpty');
+  els.addServer = qs('addServer');
+  els.authorizeAllServers = qs('authorizeAllServers');
+  els.defaultServerSelect = qs('defaultServerSelect');
+  els.serverModal = qs('serverModal');
+  els.serverForm = qs('serverForm');
+  els.serverModalTitle = qs('serverModalTitle');
+  els.server_name = qs('server_name');
+  els.server_type = qs('server_type');
+  // server typed fields
+  els.s_radicale_base = qs('s_radicale_base');
+  els.s_radicale_username = qs('s_radicale_username');
+  els.s_radicale_auth = qs('s_radicale_auth');
+  els.closeServerModal = qs('closeServerModal');
+  els._editingServerId = null;
   // modal fields
   els.taskModal = qs('taskModal');
   els.closeTaskModal = qs('closeTaskModal');
@@ -77,9 +96,10 @@ async function init(){
   els.task_enabled = qs('task_enabled');
   els.task_url = qs('task_url');
   els.task_mode = qs('task_mode');
-  els.task_parseMode = qs('task_parseMode');
   els.task_jsonPaths = qs('task_jsonPaths');
   els.task_jsonPaths_wrap = qs('task_jsonPaths_wrap');
+  els.task_parserId = qs('task_parserId');
+  els.task_serverId = qs('task_serverId');
   // new multi-trigger elements
   els.task_useTimes = qs('task_useTimes');
   els.schedule_times_wrap = qs('schedule_times_wrap');
@@ -96,31 +116,11 @@ async function init(){
   els.refreshLogs = qs('btn-refresh-logs');
   els.clearLogs = qs('btn-clear-logs');
   els.logLimit = qs('log-limit');
+  // permissions banner
+  els.permBanner = qs('permBanner');
+  els.btnAuthorizeMissing = qs('btnAuthorizeMissing');
 
-  const cfg = await loadSettings(); // after migration background will have moved tasks
-  const mapping = {
-    radicalBase: 'radicalBase',
-    radicalUsername: 'radicalUsername',
-    radicalAuth: 'radicalAuth',
-    autoSyncMinutes: 'autoSyncMinutes',
-    dateWindowDays: 'dateWindowDays',
-    enableNotifications: 'enableNotifications',
-    llmProvider: 'llmProvider',
-    pageParseUrl: 'pageParseUrl',
-    pageParseInterval: 'pageParseInterval',
-    pageParseCalendarName: 'pageParseCalendarName',
-    pageParseEnabled: 'pageParseEnabled',
-    pageParseStrategy: 'pageParseStrategy',
-    pageParseJsonPaths: 'pageParseJsonPaths',
-    pageParseJsonMode: 'pageParseJsonMode',
-  };
-  Object.entries(mapping).forEach(([k, id]) => {
-    const el = els[id];
-    if(!el) return;
-    if(k === 'enableNotifications') el.value = cfg[k] ? 'true':'false';
-    else if(k === 'llmProvider') el.value = cfg.llmProvider || 'zhipu_agent';
-    else el.value = cfg[k] ?? DEFAULTS[k];
-  });
+  const cfg = await loadSettings();
   if(els.pageParseEnabled) els.pageParseEnabled.value = cfg.pageParseEnabled ? 'true':'false';
   if(els.lastSync) els.lastSync.textContent = cfg.lastSync ? new Date(cfg.lastSync).toLocaleString() : 'n/a';
   if(els.pageParseStrategy) els.pageParseStrategy.value = cfg.pageParseStrategy || 'fetch';
@@ -130,9 +130,8 @@ async function init(){
     els.pageParseJsonModeRadios.forEach(r => r.checked = (r.value === mode));
   }
   updateJsonPanelVisibility();
-  fillProvider(cfg);
+  fillProvider();
 
-  els.llmProvider?.addEventListener('change', () => fillProvider({ llmProvider: els.llmProvider.value }));
   els.saveBtn?.addEventListener('click', saveAll);
   els.syncNow?.addEventListener('click', () => chrome.runtime.sendMessage({ type: 'SYNC_NOW' }));
   els.pageParseRun?.addEventListener('click', ()=> alert('旧版单任务即将移除，请使用上方多任务')); // deprecate
@@ -140,9 +139,18 @@ async function init(){
   els.pageParseJsonModeRadios?.forEach(r => r.addEventListener('change', ()=>{}));
   // multi task events
   els.addPageTask?.addEventListener('click', ()=> openTaskModal());
+  els.addParser?.addEventListener('click', ()=> openParserModal());
+  els.authorizeAllParsers?.addEventListener('click', authorizeAllParsers);
+  els.closeParserModal?.addEventListener('click', closeParserModal);
+  els.parserForm?.addEventListener('submit', submitParserForm);
+  els.parser_type?.addEventListener('change', onParserTypeChange);
+  els.addServer?.addEventListener('click', ()=> openServerModal());
+  els.authorizeAllServers?.addEventListener('click', authorizeAllServers);
+  els.closeServerModal?.addEventListener('click', closeServerModal);
+  els.serverForm?.addEventListener('submit', submitServerForm);
+  els.defaultServerSelect?.addEventListener('change', saveDefaultServerSelection);
   els.closeTaskModal?.addEventListener('click', closeTaskModal);
   els.taskForm?.addEventListener('submit', submitTaskForm);
-  els.task_parseMode?.addEventListener('change', updateTaskModalVisibility);
   els.task_mode?.addEventListener('change', updateTaskModalVisibility);
   els.task_useTimes?.addEventListener('change', updateScheduleModeVisibility);
   els.task_visitTrigger?.addEventListener('change', updateVisitPatternsVisibility);
@@ -150,11 +158,32 @@ async function init(){
   els.taskRunOnce?.addEventListener('click', tryRunOnceCurrentTask);
 
   await loadRenderTasks();
+  await loadRenderParsers();
+  await loadRenderServers();
+  // permissions check after lists are loaded
+  await checkAndTogglePermBanner();
+  els.btnAuthorizeMissing?.addEventListener('click', authorizeMissing);
   // initial logs load
   await refreshLogs();
   els.refreshLogs?.addEventListener('click', refreshLogs);
   els.clearLogs?.addEventListener('click', clearLogs);
   els.logLimit?.addEventListener('change', refreshLogs);
+
+  // Deep-link: open specific task editor or add modal when hash is provided
+  try {
+    const hash = location.hash || '';
+    if(hash.startsWith('#editTask=')){
+      const taskId = decodeURIComponent(hash.slice('#editTask='.length));
+      if(taskId){
+        const resp = await chrome.runtime.sendMessage({ type:'GET_PAGE_TASKS' });
+        const tasks = (resp?.tasks)||[];
+        const t = tasks.find(x=> x.id === taskId);
+        if(t) openTaskModal(t);
+      }
+    } else if(hash.startsWith('#addTask')){
+      openTaskModal();
+    }
+  } catch(e){ /* ignore deep-link errors */ }
 }
 
 function updateJsonPanelVisibility(){
@@ -260,8 +289,11 @@ function openTaskModal(task){
   els.task_enabled.value = task?.enabled? 'true':'false';
   els.task_url.value = task?.modeConfig?.url || task?.url || '';
   els.task_mode.value = 'HTTP_GET_JSON';
-  els.task_parseMode.value = (task?.modeConfig?.parseMode === 'direct') ? 'direct':'llm';
   els.task_jsonPaths.value = task?.modeConfig?.jsonPaths || task?.jsonPaths || 'data.events[*]';
+  // parser selection
+  els.task_parserId.value = task?.modeConfig?.parserId || '';
+  // server selection
+  els.task_serverId.value = task?.serverId || '';
   // multi-trigger checkboxes
   if(els.task_useInterval) els.task_useInterval.checked = (task?.useInterval === true) || (!('useInterval' in (task||{})) && (task?.scheduleType !== 'times'));
   if(els.task_useTimes) els.task_useTimes.checked = !!task?.useTimes || (task?.scheduleType === 'times');
@@ -303,8 +335,10 @@ async function submitTaskForm(ev){
     modeConfig: {
       url: els.task_url.value.trim(),
       jsonPaths: els.task_jsonPaths.value.trim(),
-      parseMode: (els.task_parseMode.value === 'direct') ? 'direct':'llm',
+      parserId: (els.task_parserId?.value || '').trim() || undefined,
+  // parseMode removed: behavior is determined by selected parser or fallback
     },
+    serverId: (els.task_serverId?.value || '').trim() || undefined,
   };
   if(!useTimes) delete data.times; if(!useInterval) delete data.intervalMinutes;
   const newTasks = els._editingTaskId ? tasks.map(t=> t.id===data.id? data: t) : [...tasks, data];
@@ -347,13 +381,6 @@ function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;','
 async function saveAll(){
   try {
     const patch = {
-      radicalBase: els.radicalBase.value.trim(),
-      radicalUsername: els.radicalUsername.value.trim(),
-      radicalAuth: els.radicalAuth.value.trim(),
-      autoSyncMinutes: Number(els.autoSyncMinutes.value) || DEFAULTS.autoSyncMinutes,
-      dateWindowDays: Number(els.dateWindowDays.value) || DEFAULTS.dateWindowDays,
-      enableNotifications: els.enableNotifications.value === 'true',
-      llmProvider: els.llmProvider.value,
       pageParseUrl: (els.pageParseUrl?.value || '').trim(),
       pageParseInterval: Number(els.pageParseInterval?.value) || 0,
       pageParseCalendarName: (els.pageParseCalendarName?.value || '').trim(),
@@ -362,41 +389,12 @@ async function saveAll(){
       pageParseJsonPaths: (els.pageParseJsonPaths?.value || '').trim(),
       pageParseJsonMode: (els.pageParseJsonModeRadios?.find(r=>r.checked)?.value) || 'llm',
     };
-    if(patch.llmProvider === 'zhipu_agent'){
-      patch.llmAgentId = (qs('llmAgentId')?.value || '').trim();
-      patch.llmApiUrl = (qs('llmApiUrl')?.value || '').trim();
-      patch.llmApiKey = (qs('llmApiKey')?.value || '').trim();
-    }
-    // 动态申请 Radicale 服务器权限（避免 CORS 尝试在无 host 权限时失败）
-    const originPattern = buildOriginPattern(patch.radicalBase);
-    if(originPattern){
-      await requestOriginPermission(originPattern);
-    }
     await saveSettings(patch);
-    alert('已保存' + (originPattern ? ` (已申请权限: ${originPattern})` : ''));
+    alert('已保存');
   } catch(e){
     console.error('保存失败', e);
     alert('保存失败: ' + (e.message || e));
   }
-}
-
-function buildOriginPattern(url){
-  try {
-    if(!url) return null;
-    const u = new URL(url);
-    // 只保留协议 + 主机 + 端口
-    return `${u.protocol}//${u.hostname}${u.port?':'+u.port:''}/*`;
-  } catch(_){ return null; }
-}
-
-async function requestOriginPermission(pattern){
-  return new Promise((resolve) => {
-    if(!chrome.permissions || !pattern) return resolve(false);
-    chrome.permissions.contains({ origins:[pattern] }, (has)=>{
-      if(has) return resolve(true);
-      chrome.permissions.request({ origins:[pattern] }, (granted)=>{ resolve(granted); });
-    });
-  });
 }
 
 async function runPageParseNow(){
@@ -462,4 +460,344 @@ async function clearLogs(){
   }catch(e){
     alert('清空失败: ' + e.message);
   }
+}
+
+// ---------------- Parsers management ----------------
+async function loadParsers(){
+  const r = await chrome.runtime.sendMessage({ type:'GET_PARSERS' });
+  if(!r?.ok) throw new Error(r.error||'获取解析器失败');
+  return r.parsers || [];
+}
+
+async function saveParsers(parsers){
+  const r = await chrome.runtime.sendMessage({ type:'SAVE_PARSERS', parsers });
+  if(!r?.ok) throw new Error(r.error||'保存解析器失败');
+  return r.parsers;
+}
+
+async function loadRenderParsers(){
+  try {
+    const parsers = await loadParsers();
+    renderParsers(parsers);
+    populateParserSelect(parsers);
+  } catch(e){ console.error('加载解析器失败', e); }
+}
+
+function renderParsers(parsers){
+  if(!els.parserList) return;
+  els.parserList.innerHTML='';
+  const empty = els.parsersEmpty;
+  if(!parsers.length){ if(empty) empty.style.display='block'; return; } else if(empty) empty.style.display='none';
+  for(const p of parsers){
+    const li = document.createElement('li');
+    li.style.cssText = 'border:1px solid #d4dbe6;padding:8px 10px;border-radius:10px;background:#fff;display:flex;flex-direction:column;gap:6px';
+    li.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:600">
+        <span>${escapeHtml(p.name||'未命名')}</span>
+        <span style="font-size:11px;color:#555">${escapeHtml(p.type||'')}</span>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button data-act="auth" style="background:#fff;border:1px solid #c5d3e2;border-radius:6px;padding:6px 8px;font-size:12px;cursor:pointer">授权</button>
+        <button data-act="edit" style="flex:1;background:#fff;border:1px solid #c5d3e2;border-radius:6px;padding:6px 0;font-size:12px;cursor:pointer">编辑</button>
+        <button data-act="del" style="flex:1;background:#fff;border:1px solid #f0b6b6;color:#c24d4d;border-radius:6px;padding:6px 0;font-size:12px;cursor:pointer">删除</button>
+      </div>`;
+  li.querySelector('[data-act=auth]').addEventListener('click', async ()=> { await requestParserPermissions(p); await checkAndTogglePermBanner(); });
+    li.querySelector('[data-act=edit]').addEventListener('click', ()=> openParserModal(p, parsers));
+    li.querySelector('[data-act=del]').addEventListener('click', async ()=>{
+      const list = parsers.filter(x=> x.id !== p.id);
+      await saveParsers(list);
+      renderParsers(list);
+      populateParserSelect(list);
+    });
+    els.parserList.appendChild(li);
+  }
+}
+
+function populateParserSelect(parsers){
+  if(!els.task_parserId) return;
+  const sel = els.task_parserId;
+  sel.innerHTML = '<option value="">(不使用解析节点)</option>';
+  for(const p of parsers){
+    const opt = document.createElement('option');
+    opt.value = p.id; opt.textContent = `${p.name} (${p.type})`;
+    sel.appendChild(opt);
+  }
+}
+
+function openParserModal(parser, all){
+  els._editingParserId = parser?.id || null;
+  els.parserModalTitle.textContent = parser? '编辑解析节点':'新增解析节点';
+  els.parser_name.value = parser?.name || '';
+  els.parser_type.value = parser?.type || 'zhipu_agent';
+  // fill type fields
+  if(els.parser_type.value === 'zhipu_agent'){
+    const c = parser?.config || {};
+    els.p_zhipu_apiUrl.value = c.apiUrl || DEFAULTS.llmApiUrl || '';
+    els.p_zhipu_apiKey.value = c.apiKey || '';
+    els.p_zhipu_agentId.value = c.agentId || DEFAULTS.llmAgentId || '';
+    showParserPanel('zhipu');
+  } else {
+    const c = parser?.config || {};
+    els.p_json_map_title.value = (c.fieldMap?.title||[]).join(',');
+    els.p_json_map_location.value = (c.fieldMap?.location||[]).join(',');
+    els.p_json_map_startTime.value = (c.fieldMap?.startTime||[]).join(',');
+    els.p_json_map_endTime.value = (c.fieldMap?.endTime||[]).join(',');
+    els.p_json_map_uid.value = (c.fieldMap?.uid||[]).join(',');
+    els.p_json_map_description.value = (c.fieldMap?.description||[]).join(',');
+    els.p_json_def_title.value = c.defaults?.title || '';
+    els.p_json_def_location.value = c.defaults?.location || '';
+    els.p_json_def_startTime.value = c.defaults?.startTime || '';
+    els.p_json_def_endTime.value = c.defaults?.endTime || '';
+    els.p_json_def_uid.value = c.defaults?.uid || '';
+    els.p_json_def_description.value = c.defaults?.description || '';
+    showParserPanel('json');
+  }
+  els._parsersCache = all || null;
+  els.parserModal.style.display='flex';
+}
+
+function closeParserModal(){ els.parserModal.style.display='none'; els._editingParserId = null; }
+
+async function submitParserForm(ev){
+  ev.preventDefault();
+  const type = els.parser_type.value;
+  let cfg = {};
+  if(type === 'zhipu_agent'){
+    cfg = { apiUrl: (els.p_zhipu_apiUrl.value||'').trim(), apiKey:(els.p_zhipu_apiKey.value||'').trim(), agentId:(els.p_zhipu_agentId.value||'').trim() };
+  } else if(type === 'json_mapping'){
+  cfg = { fieldMap: {
+      title: (els.p_json_map_title.value||'').split(',').map(s=>s.trim()).filter(Boolean),
+      location: (els.p_json_map_location.value||'').split(',').map(s=>s.trim()).filter(Boolean),
+      startTime: (els.p_json_map_startTime.value||'').split(',').map(s=>s.trim()).filter(Boolean),
+      endTime: (els.p_json_map_endTime.value||'').split(',').map(s=>s.trim()).filter(Boolean),
+      uid: (els.p_json_map_uid.value||'').split(',').map(s=>s.trim()).filter(Boolean),
+      description: (els.p_json_map_description.value||'').split(',').map(s=>s.trim()).filter(Boolean),
+    }, defaults: {
+      title: (els.p_json_def_title.value||'').trim() || undefined,
+      location: (els.p_json_def_location.value||'').trim() || undefined,
+      startTime: (els.p_json_def_startTime.value||'').trim() || undefined,
+      endTime: (els.p_json_def_endTime.value||'').trim() || undefined,
+      uid: (els.p_json_def_uid.value||'').trim() || undefined,
+      description: (els.p_json_def_description.value||'').trim() || undefined,
+    } };
+  }
+  try {
+    const list = els._parsersCache || await loadParsers();
+    const data = {
+      id: els._editingParserId || ('parser-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6)),
+      name: els.parser_name.value.trim() || '未命名解析器',
+      type,
+      config: cfg,
+    };
+    const newList = els._editingParserId ? list.map(x=> x.id===data.id? data: x) : [...list, data];
+    const saved = await saveParsers(newList);
+    const current = saved.find(x=> x.id === data.id);
+    if(current){ await requestParserPermissions(current, { silent: true }); }
+    renderParsers(saved);
+    populateParserSelect(saved);
+    closeParserModal();
+  } catch(e){ alert('保存解析器失败: '+ e.message); }
+}
+
+function onParserTypeChange(){
+  const t = els.parser_type?.value || 'zhipu_agent';
+  if(t === 'zhipu_agent') showParserPanel('zhipu'); else showParserPanel('json');
+}
+
+function showParserPanel(kind){
+  const a = document.getElementById('parser_panel_zhipu');
+  const b = document.getElementById('parser_panel_jsonmap');
+  if(!a||!b) return;
+  a.style.display = kind==='zhipu' ? 'flex' : 'none';
+  b.style.display = kind==='json' ? 'flex' : 'none';
+}
+
+// ---------------- Servers management ----------------
+async function loadServers(){
+  const r = await chrome.runtime.sendMessage({ type:'GET_SERVERS' });
+  if(!r?.ok) throw new Error(r.error||'获取服务器失败');
+  return r.servers || [];
+}
+
+async function saveServers(servers){
+  const r = await chrome.runtime.sendMessage({ type:'SAVE_SERVERS', servers });
+  if(!r?.ok) throw new Error(r.error||'保存服务器失败');
+  return r.servers;
+}
+
+async function loadRenderServers(){
+  try {
+    const servers = await loadServers();
+    renderServers(servers);
+    populateServerSelects(servers);
+    // set default select from storage
+    const cfg = await loadSettings();
+    if(els.defaultServerSelect){ els.defaultServerSelect.value = cfg.selectedServerId || ''; }
+  } catch(e){ console.error('加载服务器失败', e); }
+}
+
+function renderServers(servers){
+  if(!els.serverList) return;
+  els.serverList.innerHTML='';
+  const empty = els.serversEmpty;
+  if(!servers.length){ if(empty) empty.style.display='block'; return; } else if(empty) empty.style.display='none';
+  for(const s of servers){
+    const li = document.createElement('li');
+    li.style.cssText = 'border:1px solid #d4dbe6;padding:8px 10px;border-radius:10px;background:#fff;display:flex;flex-direction:column;gap:6px';
+    li.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:600">
+        <span>${escapeHtml(s.name||'未命名')}</span>
+        <span style="font-size:11px;color:#555">${escapeHtml(s.type||'')}</span>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button data-act="auth" style="background:#fff;border:1px solid #c5d3e2;border-radius:6px;padding:6px 8px;font-size:12px;cursor:pointer">授权</button>
+        <button data-act="edit" style="flex:1;background:#fff;border:1px solid #c5d3e2;border-radius:6px;padding:6px 0;font-size:12px;cursor:pointer">编辑</button>
+        <button data-act="del" style="flex:1;background:#fff;border:1px solid #f0b6b6;color:#c24d4d;border-radius:6px;padding:6px 0;font-size:12px;cursor:pointer">删除</button>
+      </div>`;
+  li.querySelector('[data-act=auth]').addEventListener('click', async ()=> { await requestServerPermissions(s); await checkAndTogglePermBanner(); });
+    li.querySelector('[data-act=edit]').addEventListener('click', ()=> openServerModal(s, servers));
+    li.querySelector('[data-act=del]').addEventListener('click', async ()=>{
+      const list = servers.filter(x=> x.id !== s.id);
+      await saveServers(list);
+      renderServers(list);
+      populateServerSelects(list);
+    });
+    els.serverList.appendChild(li);
+  }
+}
+
+function populateServerSelects(servers){
+  const opts = ['<option value="">(默认)</option>'].concat((servers||[]).map(s=> `<option value="${s.id}">${escapeHtml(s.name)} (${escapeHtml(s.type)})</option>`)).join('');
+  if(els.task_serverId) els.task_serverId.innerHTML = opts;
+  if(els.defaultServerSelect) els.defaultServerSelect.innerHTML = ['<option value="">(不设置)</option>'].concat((servers||[]).map(s=> `<option value="${s.id}">${escapeHtml(s.name)} (${escapeHtml(s.type)})</option>`)).join('');
+}
+
+function openServerModal(server, all){
+  els._editingServerId = server?.id || null;
+  els.serverModalTitle.textContent = server? '编辑服务器节点':'新增服务器节点';
+  els.server_name.value = server?.name || '';
+  els.server_type.value = server?.type || 'radicale';
+  const c = server?.config || {};
+  els.s_radicale_base.value = c.base || '';
+  els.s_radicale_username.value = c.username || '';
+  els.s_radicale_auth.value = c.auth || '';
+  els._serversCache = all || null;
+  els.serverModal.style.display='flex';
+}
+
+function closeServerModal(){ els.serverModal.style.display='none'; els._editingServerId=null; }
+
+async function submitServerForm(ev){
+  ev.preventDefault();
+  const cfg = { base: (els.s_radicale_base.value||'').trim(), username:(els.s_radicale_username.value||'').trim(), auth:(els.s_radicale_auth.value||'').trim() };
+  try {
+    const list = els._serversCache || await loadServers();
+    const data = { id: els._editingServerId || ('server-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6)), name: els.server_name.value.trim()||'未命名服务器', type: els.server_type.value, config: cfg };
+    const newList = els._editingServerId ? list.map(x=> x.id===data.id? data: x) : [...list, data];
+    const saved = await saveServers(newList);
+    const current = saved.find(x=> x.id === data.id);
+    if(current){ await requestServerPermissions(current, { silent: true }); }
+    renderServers(saved);
+    populateServerSelects(saved);
+    closeServerModal();
+  } catch(e){ alert('保存服务器失败: '+ e.message); }
+}
+
+async function saveDefaultServerSelection(){
+  try{
+    const id = (els.defaultServerSelect?.value || '').trim();
+    await saveSettings({ selectedServerId: id || undefined });
+  }catch(e){ console.error('保存默认服务器失败', e); }
+}
+
+// Compute missing optional host permissions and toggle banner
+async function checkAndTogglePermBanner(){
+  try{
+    const [servers, parsers] = await Promise.all([loadServers(), loadParsers()]);
+    const origins = [
+      ...servers.flatMap(buildOriginsForServer),
+      ...parsers.flatMap(buildOriginsForParser)
+    ];
+    const uniq = Array.from(new Set(origins.filter(Boolean)));
+    if(!uniq.length){ if(els.permBanner) els.permBanner.style.display='none'; return; }
+    const hasAll = await chrome.permissions.contains({ origins: uniq });
+    if(els.permBanner) els.permBanner.style.display = hasAll ? 'none':'block';
+  }catch(e){ console.warn('权限检查失败', e); }
+}
+
+async function authorizeMissing(){
+  try{
+    const [servers, parsers] = await Promise.all([loadServers(), loadParsers()]);
+    const origins = [
+      ...servers.flatMap(buildOriginsForServer),
+      ...parsers.flatMap(buildOriginsForParser)
+    ];
+    const res = await ensureHostPermissions(origins, false);
+    if(res.ok){ await checkAndTogglePermBanner(); }
+  }catch(e){ alert('授权失败: '+ e.message); }
+}
+
+// ---------------- Dynamic host permission helpers ----------------
+function buildOriginsFromUrl(u){
+  try{
+    const url = new URL(u);
+    return [`${url.protocol}//${url.hostname}${url.port? (":"+url.port):''}/*`];
+  }catch{ return []; }
+}
+
+function buildOriginsForServer(server){
+  if(!server || server.type !== 'radicale') return [];
+  const base = server.config?.base || '';
+  return buildOriginsFromUrl(base);
+}
+
+function buildOriginsForParser(parser){
+  if(!parser) return [];
+  if(parser.type === 'zhipu_agent'){
+    const apiUrl = parser.config?.apiUrl || '';
+    return buildOriginsFromUrl(apiUrl);
+  }
+  return [];
+}
+
+async function ensureHostPermissions(origins, silent){
+  const uniq = Array.from(new Set((origins||[]).filter(Boolean)));
+  if(!uniq.length) return { ok:true, granted:false };
+  try{
+    const already = await chrome.permissions.contains({ origins: uniq });
+    if(already) return { ok:true, granted:true, already:true };
+    const granted = await chrome.permissions.request({ origins: uniq });
+    if(!granted && !silent){ alert('用户未授权访问这些地址：\n'+ uniq.join('\n')); }
+    return { ok:true, granted };
+  }catch(e){ if(!silent) alert('请求权限失败: '+ e.message); return { ok:false, error:e.message }; }
+}
+
+async function requestServerPermissions(server, opts){
+  const origins = buildOriginsForServer(server);
+  if(!origins.length) return { ok:true, granted:false };
+  return await ensureHostPermissions(origins, opts?.silent);
+}
+
+async function requestParserPermissions(parser, opts){
+  const origins = buildOriginsForParser(parser);
+  if(!origins.length) return { ok:true, granted:false };
+  return await ensureHostPermissions(origins, opts?.silent);
+}
+
+async function authorizeAllServers(){
+  try{
+    const servers = await loadServers();
+    const all = servers.flatMap(buildOriginsForServer);
+    const res = await ensureHostPermissions(all, false);
+    if(res.ok && res.granted){ alert('服务器地址授权完成'); }
+  }catch(e){ alert('批量授权失败: '+ e.message); }
+}
+
+async function authorizeAllParsers(){
+  try{
+    const parsers = await loadParsers();
+    const all = parsers.flatMap(buildOriginsForParser);
+    const res = await ensureHostPermissions(all, false);
+    if(res.ok && res.granted){ alert('解析服务地址授权完成'); }
+  }catch(e){ alert('批量授权失败: '+ e.message); }
 }

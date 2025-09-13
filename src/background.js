@@ -8,6 +8,8 @@ import {
   DEFAULTS,
   parseLLMTime,
 } from './shared.js';
+import { loadParsers, saveParsers, getParserById, parseWithParser } from './parsers.js';
+import { loadServers, saveServers, getServerById, mergeUploadWithServer } from './servers.js';
 
 // -------------------------------------------------
 // 新版多任务模型 (V3)
@@ -28,7 +30,7 @@ import {
 //   modeConfig: {             // 模式配置
 //     url: string;            // 目标 URL (HTTP GET)
 //     jsonPaths: string;      // 多行 JSON 路径 (同旧版)
-//     parseMode: 'llm'|'direct'; // llm=页面/文本经 LLM 解析；direct=JSON 路径直取
+//     parseMode: 'llm'|'direct'; // deprecated from UI; inferred by parserId or legacy data
 //   };
 // }>
 // 旧版迁移：
@@ -156,9 +158,9 @@ function buildICS(events, calendarName = 'SJTU') {
       lines.push(`DTSTART:${isoToICSTime(s)}`);
       lines.push(`DTEND:${isoToICSTime(e)}`);
       lines.push(`SUMMARY:${escapeICSText(ev.title || ev.summary || '')}`);
-      if (ev.location) lines.push(`LOCATION:${escapeICSText(ev.location)}`);
-      if (ev.status) lines.push(`STATUS:${escapeICSText(ev.status)}`);
-      lines.push(`DESCRIPTION:${escapeICSText(JSON.stringify(ev))}`);
+  if (ev.location) lines.push(`LOCATION:${escapeICSText(ev.location)}`);
+  if (ev.status) lines.push(`STATUS:${escapeICSText(ev.status)}`);
+  if (ev.description) lines.push(`DESCRIPTION:${escapeICSText(String(ev.description))}`);
       lines.push('END:VEVENT');
     } catch (e) {
       console.warn('buildICS fail', e);
@@ -311,8 +313,8 @@ async function runSync() {
     if (!eventsResp?.success) throw new Error('事件列表返回异常');
     const events = eventsResp.data?.events || [];
     const calName = `SJTU-${account}`;
-    const ics = buildICS(events, calName);
-    await uploadToRadicale(ics, calName, settings);
+    // Use selected server node if set; fallback handled inside
+    await uploadWithSelectedServer(events, calName, settings.selectedServerId);
   } catch (e) {
     notifyAll('同步失败: ' + (e.message || e));
   }
@@ -340,7 +342,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg?.type === 'PARSE_LLM') {
     // 保持原 content 弹窗调用：解析 + 上传
-    parseLLMAndUpload(msg.text)
+    parseLLMAndUpload(msg.text, msg.serverId)
       .then((r) => sendResponse({ ok: true, ...r }))
       .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true;
@@ -352,7 +354,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
   if (msg?.type === 'UPLOAD_EVENTS') {
-    uploadEventsList(msg.events)
+    uploadEventsList(msg.events, msg.serverId)
       .then((count) => sendResponse({ ok: true, count }))
       .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true;
@@ -367,6 +369,43 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     loadAllSettingsWithTaskMigration()
       .then((s) => sendResponse({ ok: true, tasks: s.pageTasks || [] }))
       .catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+  if (msg?.type === 'GET_PARSERS') {
+    (async () => {
+      const list = await loadParsers();
+      sendResponse({ ok: true, parsers: list });
+    })().catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+  if (msg?.type === 'GET_SERVERS') {
+    (async () => {
+      const list = await loadServers();
+      sendResponse({ ok: true, servers: list });
+    })().catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+  if (msg?.type === 'SAVE_SERVERS') {
+    (async () => {
+      const list = await saveServers(Array.isArray(msg.servers) ? msg.servers : []);
+      sendResponse({ ok: true, servers: list });
+    })().catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+  if (msg?.type === 'SAVE_PARSERS') {
+    (async () => {
+      const list = await saveParsers(Array.isArray(msg.parsers) ? msg.parsers : []);
+      sendResponse({ ok: true, parsers: list });
+    })().catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+  if (msg?.type === 'PARSE_TEXT_WITH_PARSER') {
+    (async () => {
+      const parser = await getParserById(msg.parserId);
+      if (!parser) throw new Error('解析器未找到');
+      const events = await parseWithParser(String(msg.text||''), parser, { jsonPaths: msg.jsonPaths });
+      sendResponse({ ok: true, events });
+    })().catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }
   if (msg?.type === 'SAVE_PAGE_TASKS') {
@@ -493,112 +532,35 @@ chrome.contextMenus?.onClicked.addListener((info, tab) => {
   }
 });
 
-// LLM parsing + upload
-async function parseLLMAndUpload(rawText) {
-  const settings = await loadSettings();
-  const key = settings.llmApiKey;
-  if (!key) throw new Error('未配置 LLM API Key');
-  if (settings.llmProvider !== 'zhipu_agent') throw new Error('不支持的 provider');
-  const agentId = settings.llmAgentId;
-  if (!agentId) throw new Error('未配置 Agent ID');
-  const now = new Date();
-  const todayDate = now.toISOString().split('T')[0];
-  const currentTime = now.toTimeString().split(' ')[0];
-  const body = {
-    app_id: agentId,
-    messages: [
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'input',
-            value: `今天的日期是 ${todayDate}，当前时间是 ${currentTime}。\n\n请解析以下文本为日程:\n${rawText}`,
-          },
-        ],
-      },
-    ],
-    stream: false,
-  };
-  const resp = await fetch(settings.llmApiUrl || DEFAULTS.llmApiUrl, {
-    method: 'POST',
-    headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!resp.ok) throw new Error('LLM 请求失败 ' + resp.status);
-  const json = await resp.json();
-  const content = json.choices?.[0]?.messages?.content?.msg;
-  if (!content) throw new Error('LLM 返回空内容');
-  let parsed;
-  try {
-    parsed = JSON.parse(content);
-  } catch (e) {
-    throw new Error('解析 LLM JSON 失败');
-  }
-  if (!Array.isArray(parsed.events)) throw new Error('事件结构无效');
-  for (const ev of parsed.events) {
-    if (!ev.startTime || !ev.endTime || !ev.title) throw new Error('事件缺少字段');
-  }
-  const events = parsed.events.map((ev) => ({
-    ...ev,
-    startTime: parseLLMTime(ev.startTime),
-    endTime: parseLLMTime(ev.endTime),
-  }));
-  // 增量合并上传
-  const mergedInfo = await mergeUpload('LLM-Parsed', events);
-  return { count: events.length, total: mergedInfo.total };
+// Choose default parser node when none specified: prefer first configured parser
+async function getDefaultParser() {
+  const list = await loadParsers();
+  if (!Array.isArray(list) || !list.length) return null;
+  return list[0];
+}
+
+// LLM parsing + upload via default parser node
+async function parseLLMAndUpload(rawText, serverId) {
+  const parser = await getDefaultParser();
+  if (!parser) throw new Error('未配置解析节点，请先在设置中添加解析节点');
+  const events = await parseWithParser(String(rawText||''), parser, {});
+  const { total } = await uploadWithSelectedServer(events, 'LLM-Parsed', serverId);
+  return { count: events.length, total };
 }
 
 async function parseLLMOnly(rawText) {
-  const settings = await loadSettings();
-  const key = settings.llmApiKey;
-  if (!key) throw new Error('未配置 LLM API Key');
-  if (settings.llmProvider !== 'zhipu_agent') throw new Error('不支持的 provider');
-  const agentId = settings.llmAgentId;
-  if (!agentId) throw new Error('未配置 Agent ID');
-  const now = new Date();
-  const todayDate = now.toISOString().split('T')[0];
-  const currentTime = now.toTimeString().split(' ')[0];
-  const body = {
-    app_id: agentId,
-    messages: [
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'input',
-            value: `今天的日期是 ${todayDate}，当前时间是 ${currentTime}。\n\n请解析以下文本为日程(以 JSON 返回，格式 {"events":[{"title":"","startTime":"YYYY-MM-DD HH:mm","endTime":"YYYY-MM-DD HH:mm","location":""}]}, 不要包含其他文字):\n${rawText}`,
-          },
-        ],
-      },
-    ],
-    stream: false,
-  };
-  const resp = await fetch(settings.llmApiUrl || DEFAULTS.llmApiUrl, {
-    method: 'POST',
-    headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!resp.ok) throw new Error('LLM 请求失败 ' + resp.status);
-  const json = await resp.json();
-  const content = json.choices?.[0]?.messages?.content?.msg;
-  if (!content) throw new Error('LLM 返回空内容');
-  let parsed;
-  try {
-    parsed = JSON.parse(content);
-  } catch (e) {
-    throw new Error('解析 LLM JSON 失败');
-  }
-  if (!Array.isArray(parsed.events)) throw new Error('事件结构无效');
-  return parsed.events.map((ev) => ({
+  const parser = await getDefaultParser();
+  if (!parser) throw new Error('未配置解析节点，请先在设置中添加解析节点');
+  const events = await parseWithParser(String(rawText||''), parser, {});
+  // keep raw fields for UI edit page compatibility
+  return events.map(ev => ({
     ...ev,
-    startTime: ev.startTime,
-    endTime: ev.endTime,
-    startTimeRaw: ev.startTime,
-    endTimeRaw: ev.endTime,
+    startTimeRaw: ev.startTimeRaw || ev.startTime,
+    endTimeRaw: ev.endTimeRaw || ev.endTime,
   }));
 }
 
-async function uploadEventsList(events) {
+async function uploadEventsList(events, serverId) {
   if (!Array.isArray(events) || !events.length) throw new Error('事件为空');
   const settings = await loadSettings();
   const norm = events.map((ev) => {
@@ -613,9 +575,9 @@ async function uploadEventsList(events) {
     if (!ev.title || !ev.startTime || !ev.endTime) dropped.push(ev); else valid.push(ev);
   }
   if (!valid.length) throw new Error('全部事件缺少字段或时间格式无法解析');
-  const mergedInfo = await mergeUpload('LLM-Parsed', valid);
-  if (dropped.length) notifyAll(`合并上传 ${valid.length} 条，丢弃 ${dropped.length} 条；当前日历共 ${mergedInfo.total} 条`);
-  else notifyAll(`合并上传 ${valid.length} 条；当前日历共 ${mergedInfo.total} 条`);
+  const { total } = await uploadWithSelectedServer(valid, 'LLM-Parsed', serverId);
+  if (dropped.length) notifyAll(`合并上传 ${valid.length} 条，丢弃 ${dropped.length} 条；当前日历共 ${total} 条`);
+  else notifyAll(`合并上传 ${valid.length} 条；当前日历共 ${total} 条`);
   return valid.length;
 }
 
@@ -675,15 +637,15 @@ async function runPageParseOnce(url, calendarName){
       // 内容看起来像含有 JSON 对象，且用户仍是 llm 模式：可选择仍交给 LLM；此处不自动 JSON 直取
     }
     if(parsedEvents){
-      const info = await mergeUpload(calendarName || 'PAGE-PARSED', parsedEvents);
-      notifyAll(`页面(JSON)解析完成: 新增 ${parsedEvents.length} 条（合并后总 ${info.total} 条）`);
-      return { added: parsedEvents.length, total: info.total, json: true };
+      const { total } = await uploadWithSelectedServer(parsedEvents, calendarName || 'PAGE-PARSED', settings.selectedServerId);
+      notifyAll(`页面(JSON)解析完成: 新增 ${parsedEvents.length} 条（合并后总 ${total} 条）`);
+      return { added: parsedEvents.length, total, json: true };
     }
   }
   const events = await parseTextViaLLM(text);
-  const info = await mergeUpload(calendarName || 'PAGE-PARSED', events);
-  notifyAll(`页面解析完成: 新增 ${events.length} 条（合并后总 ${info.total} 条）`);
-  return { added: events.length, total: info.total };
+  const { total } = await uploadWithSelectedServer(events, calendarName || 'PAGE-PARSED', settings.selectedServerId);
+  notifyAll(`页面解析完成: 新增 ${events.length} 条（合并后总 ${total} 条）`);
+  return { added: events.length, total };
 }
 
 // -----------------------------
@@ -768,8 +730,11 @@ function sanitizeNewTasks(tasks){
     modeConfig: {
       url: t.modeConfig?.url || t.url || '',
       jsonPaths: t.modeConfig?.jsonPaths || t.jsonPaths || 'data.events[*]',
-      parseMode: (t.modeConfig?.parseMode || (t.jsonMode==='json'?'direct':'llm') || 'llm') === 'direct' ? 'direct':'llm',
+      parserId: t.modeConfig?.parserId || t.parserId || undefined,
+  // parseMode no longer set by UI; keep legacy compatibility if present
+  parseMode: (t.modeConfig?.parseMode || (t.jsonMode==='json'?'direct':'llm') || 'llm') === 'direct' ? 'direct':'llm',
     },
+    serverId: t.serverId || undefined,
   })).filter(t => t.modeConfig.url);
 }
 
@@ -778,8 +743,32 @@ async function runSinglePageTask(task){
   const { calendarName, modeConfig } = task;
   const url = modeConfig.url;
   if(!url) throw new Error('URL 为空');
+  // If parserId specified, use parser exclusively
+  if (modeConfig.parserId) {
+    const parser = await getParserById(modeConfig.parserId);
+    if (!parser) throw new Error('解析器不存在: ' + modeConfig.parserId);
+    // Fetch strategy: json_mapping needs raw JSON; LLM parsers prefer visible text
+    let text = '';
+    try {
+      if (parser.type === 'json_mapping') {
+        const r = await httpFetch(url);
+        text = r.text || '';
+      } else {
+        text = await fallbackFetchPage(url, console.log, console.warn);
+      }
+    } catch { text=''; }
+    const eventsParsed = await parseWithParser(text, parser, { jsonPaths: modeConfig.jsonPaths });
+    const { total } = await uploadWithSelectedServer(eventsParsed || [], calendarName, task.serverId);
+    notifyAll(`任务 ${calendarName} (parser:${parser.name||parser.type}) 完成: +${(eventsParsed||[]).length} (总${total})`);
+    return { added: (eventsParsed||[]).length, total, direct: parser.type === 'json_mapping' };
+  }
+  // No explicit parser: choose fetch by parseMode
   let text = '';
-  try { text = await fallbackFetchPage(url, console.log, console.warn); } catch{ text=''; }
+  if (modeConfig.parseMode === 'direct'){
+    try { const r = await httpFetch(url); text = r.text || ''; } catch { text=''; }
+  } else {
+    try { text = await fallbackFetchPage(url, console.log, console.warn); } catch { text=''; }
+  }
   if(modeConfig.parseMode === 'direct'){
     const pseudoSettings = { pageParseJsonPaths: modeConfig.jsonPaths };
     const events = await tryParseJsonEvents(text, pseudoSettings) || [];
@@ -797,9 +786,25 @@ async function runSinglePageTask(task){
     if(narrowed) llmInput = narrowed;
   }
   const eventsLLM = await parseTextViaLLM(llmInput);
-  const info2 = await mergeUpload(calendarName || 'PAGE-PARSED', eventsLLM);
-  notifyAll(`任务 ${calendarName} 完成: +${eventsLLM.length} (总${info2.total})`);
-  return { added: eventsLLM.length, total: info2.total };
+  const { total: total2 } = await uploadWithSelectedServer(eventsLLM, calendarName, task.serverId);
+  notifyAll(`任务 ${calendarName} 完成: +${eventsLLM.length} (总${total2})`);
+  return { added: eventsLLM.length, total: total2 };
+}
+
+async function uploadWithSelectedServer(events, calendarName, serverId){
+  const settings = await loadSettings();
+  // preference: task.serverId -> global selectedServerId -> fallback legacy radical
+  const prefId = serverId || settings.selectedServerId;
+  if (prefId){
+    let server = null;
+    try { server = await getServerById(prefId); } catch(_) {}
+    if (server){
+      const r = await mergeUploadWithServer(events, calendarName || 'PAGE-PARSED', server);
+      return { total: r.total };
+    }
+  }
+  const info = await mergeUpload(calendarName || 'PAGE-PARSED', events);
+  return { total: info.total };
 }
 
 // -----------------------------
@@ -1047,35 +1052,9 @@ function waitTabComplete(tabId, timeoutMs){
 }
 
 async function parseTextViaLLM(rawText){
-  const settings = await loadSettings();
-  const key = settings.llmApiKey;
-  if(!key) throw new Error('未配置 LLM API Key');
-  if(settings.llmProvider !== 'zhipu_agent') throw new Error('不支持的 provider');
-  const agentId = settings.llmAgentId; if(!agentId) throw new Error('未配置 Agent ID');
-  const now = new Date();
-  const todayDate = now.toISOString().split('T')[0];
-  const currentTime = now.toTimeString().split(' ')[0];
-  const body = {
-    app_id: agentId,
-    messages: [ { role:'user', content:[ { type:'input', value:`今天的日期是 ${todayDate}，当前时间是 ${currentTime}。\n\n请从以下页面文本中提取日程 (JSON: {"events":[{"title":"","startTime":"YYYY-MM-DD HH:mm","endTime":"YYYY-MM-DD HH:mm","location":""}]}, 不要输出额外解释) ：\n${rawText.slice(0,4000)}` } ] } ],
-    stream:false,
-  };
-  const resp = await fetch(settings.llmApiUrl || DEFAULTS.llmApiUrl, {
-    method:'POST',
-    headers:{ Authorization:'Bearer ' + key, 'Content-Type':'application/json' },
-    body: JSON.stringify(body),
-  });
-  if(!resp.ok) throw new Error('LLM 请求失败 ' + resp.status);
-  const json = await resp.json();
-  const content = json.choices?.[0]?.messages?.content?.msg;
-  if(!content) throw new Error('LLM 返回空内容');
-  let parsed; try { parsed = JSON.parse(content); } catch { throw new Error('解析 LLM JSON 失败'); }
-  if(!Array.isArray(parsed.events)) throw new Error('事件结构无效');
-  const events = parsed.events.map(ev => ({
-    ...ev,
-    startTime: parseLLMTime(ev.startTime),
-    endTime: parseLLMTime(ev.endTime),
-  })).filter(ev => ev.startTime && ev.endTime && ev.title);
+  const parser = await getDefaultParser();
+  if (!parser) throw new Error('未配置解析节点，请先在设置中添加解析节点');
+  const events = await parseWithParser(String(rawText||''), parser, {});
   return events;
 }
 

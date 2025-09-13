@@ -6,12 +6,15 @@
     <title>SJTU Auto Calendar</title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <style>
+        html, body, * { box-sizing: border-box; }
         body {
             font-family: system-ui, Segoe UI;
             min-width: 280px;
+            max-width: 420px;
             margin: 0;
             padding: 14px;
-            background: #f5f9ff
+            background: #f5f9ff;
+            overflow-x: hidden;
         }
 
         h1 {
@@ -38,13 +41,14 @@
             gap: 8px;
             flex-wrap: wrap
         }
+        /* No inline modal in popup; editing handled in options page */
     </style>
 </head>
 
 <body>
         <h1 style="font-size:15px;display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">SJTU Auto Calendar <button id="openOptions" style="background:#fff;border:1px solid #c5d3e2;font-size:12px;padding:4px 8px;border-radius:6px;cursor:pointer">设置</button></h1>
         <div style="display:flex;flex-direction:column;gap:12px">
-            <section style="background:#fff;padding:10px;border:1px solid #dbe5f0;border-radius:10px">
+            <section style="background:#fff;padding:10px;border:1px solid #dbe5f0;border-radius:10px;max-width:100%">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
                     <span style="font-size:13px;font-weight:600">定时任务</span>
                     <button id="addTask" style="background:#0b74de;color:#fff;font-size:12px;padding:4px 10px;border:none;border-radius:6px;cursor:pointer">新增</button>
@@ -52,7 +56,7 @@
                 <div id="tasksEmpty" style="font-size:12px;color:#666;display:none">暂无任务，点击“新增”创建。</div>
                 <ul id="taskList" style="list-style:none;margin:0;padding:0;max-height:200px;overflow:auto;display:flex;flex-direction:column;gap:6px"></ul>
             </section>
-            <section style="background:#fff;padding:10px;border:1px solid #dbe5f0;border-radius:10px">
+            <section style="background:#fff;padding:10px;border:1px solid #dbe5f0;border-radius:10px;max-width:100%">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
                     <span style="font-size:13px;font-weight:600">非结构化日程解析</span>
                     <button id="parseLLMBtn" style="background:#0b74de;color:#fff;font-size:12px;padding:4px 10px;border:none;border-radius:6px;cursor:pointer">解析并上传</button>
@@ -60,90 +64,12 @@
                 <textarea id="freeText" placeholder="粘贴待解析的自然语言日程..." style="width:100%;min-height:80px;resize:vertical;border:1px solid #c5d3e2;border-radius:6px;padding:6px;font-size:12px;font-family:system-ui"></textarea>
                 <div id="freeTextStatus" style="font-size:11px;color:#666;margin-top:4px"></div>
             </section>
-                    <section style="display:flex;gap:8px">
+                    <section style="display:flex;gap:8px;max-width:100%">
                         <button id="openParsePage" style="flex:1;background:#fff;border:1px solid #c5d3e2;border-radius:8px;padding:8px 12px;font-weight:600;cursor:pointer">打开解析页面</button>
                     </section>
         </div>
         <div id="status" style="margin-top:10px;font-size:11px;color:#555"></div>
     <script src="src/popup.js" type="module"></script>
-
-            <!-- 编辑任务模态 (V3 同步新版结构) -->
-            <div id="popupTaskModal" class="cal-modal-overlay" style="position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:flex-start;justify-content:center;padding:50px 18px;z-index:9999;backdrop-filter:blur(2px)">
-                <div class="cal-modal" style="width:640px;max-width:100%;background:#fff;border-radius:18px;padding:22px 26px;display:flex;flex-direction:column;gap:18px;box-shadow:0 6px 34px -8px rgba(0,0,0,.35);border:1px solid #e6edf5">
-                    <div style="display:flex;align-items:center;justify-content:space-between">
-                        <h2 style="margin:0;font-size:18px;font-weight:650;letter-spacing:.5px;color:#0f172a" id="popupTaskModalTitle">任务</h2>
-                        <button id="popupCloseTaskModal" type="button" style="background:#f1f5f9;border:1px solid #d8e2ed;border-radius:8px;padding:6px 14px;cursor:pointer;font-size:13px;font-weight:600;color:#334155">关闭</button>
-                    </div>
-                    <form id="popupTaskForm" style="display:flex;flex-direction:column;gap:18px">
-                        <div style="display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start">
-                            <label style="flex:1;min-width:180px;font-size:13px">任务名称
-                                <input id="p_task_name" type="text" required style="margin-top:4px">
-                            </label>
-                            <label style="flex:1;min-width:180px;font-size:13px">日历名称
-                                <input id="p_task_calendarName" type="text" required style="margin-top:4px">
-                            </label>
-                            <label style="flex:0.6;min-width:120px;font-size:13px">启用
-                                <select id="p_task_enabled" style="margin-top:4px"><option value="true">是</option><option value="false">否</option></select>
-                            </label>
-                        </div>
-                        <fieldset style="border:1px solid #e1e8f0;padding:16px 18px;border-radius:14px;margin:0;display:flex;flex-direction:column;gap:14px;background:#fafcff">
-                            <legend style="padding:0 8px;font-size:13px;font-weight:600;color:#0f172a">触发方式（可多选）</legend>
-                            <div style="display:flex;flex-direction:column;gap:10px">
-                                <label style="display:flex;align-items:center;gap:8px;font-size:13px"><input type="checkbox" id="p_task_useInterval"> 周期(分钟)
-                                    <input id="p_task_interval" type="number" min="1" required style="margin-top:4px;width:120px" placeholder="间隔分钟">
-                                </label>
-                                <div>
-                                    <label style="display:flex;align-items:center;gap:8px;font-size:13px"><input type="checkbox" id="p_task_useTimes"> 指定时间点(HH:mm)</label>
-                                    <div id="p_schedule_times_wrap" style="display:none;flex-direction:column;gap:10px;margin-top:6px">
-                                        <div id="p_task_times_list" style="display:flex;gap:8px;flex-wrap:wrap"></div>
-                                        <div style="display:flex;gap:10px;flex-wrap:wrap">
-                                            <input id="p_task_time_input" type="text" placeholder="HH:mm" style="flex:1;min-width:140px;padding:8px 10px;border:1px solid #d4dbe6;border-radius:10px;font-size:13px">
-                                            <button id="p_task_time_add" type="button" style="background:#0b74de;color:#fff;padding:8px 16px;border:none;border-radius:10px;font-size:12px;font-weight:600;cursor:pointer">添加</button>
-                                        </div>
-                                        <div style="font-size:11px;color:#64748b">触发后自动排入下一天同一时间</div>
-                                    </div>
-                                </div>
-                                <div>
-                                    <label style="display:flex;align-items:center;gap:8px;font-size:13px"><input type="checkbox" id="p_task_visitTrigger"> 访问页面触发</label>
-                                    <div id="p_visit_patterns_wrap" style="display:none;flex-direction:column;gap:6px;margin-top:6px">
-                                        <label style="font-size:13px">匹配前缀（每行一条；留空默认使用目标 URL）
-                                            <textarea id="p_task_visitPatterns" style="margin-top:6px;height:60px;line-height:1.4;font-family:monospace;font-size:12px;padding:8px 10px;border:1px solid #d4dbe6;border-radius:10px;resize:vertical" placeholder="https://my.sjtu.edu.cn/ui/calendar
-https://calendar.sjtu.edu.cn/..."></textarea>
-                                        </label>
-                                    </div>
-                                </div>
-                            </div>
-                        </fieldset>
-                        <fieldset style="border:1px solid #e1e8f0;padding:16px 18px;border-radius:14px;margin:0;display:flex;flex-direction:column;gap:14px;background:#fafcff">
-                            <legend style="padding:0 8px;font-size:13px;font-weight:600;color:#0f172a">数据获取模式</legend>
-                            <div style="display:flex;flex-direction:column;gap:14px">
-                                <label style="width:220px;font-size:13px">模式
-                                    <select id="p_task_mode" style="margin-top:4px"><option value="HTTP_GET_JSON">HTTP_GET_JSON</option></select>
-                                </label>
-                                <div id="p_modePanel_HTTP_GET_JSON" style="display:flex;flex-direction:column;gap:14px">
-                                    <label style="font-size:13px">目标 URL
-                                        <input id="p_task_url" type="text" required style="margin-top:4px">
-                                    </label>
-                                    <div style="display:flex;gap:20px;flex-wrap:wrap">
-                                        <label style="flex:0 0 220px;font-size:13px">解析方式
-                                            <select id="p_task_parseMode" style="margin-top:4px"><option value="llm">LLM</option><option value="direct">直接(JSON提取)</option></select>
-                                        </label>
-                                        <div style="flex:1;font-size:11px;color:#64748b;line-height:1.5;align-self:flex-end">LLM：文本送入模型解析；直接：路径提取事件，空则回退 LLM。</div>
-                                    </div>
-                                    <label id="p_task_jsonPaths_wrap" style="display:block;font-size:13px">JSON 路径 (多行，用于 direct 提取或 LLM 预裁剪)
-                                        <textarea id="p_task_jsonPaths" style="margin-top:6px;width:100%;min-height:110px;font-family:monospace;font-size:12px;padding:8px 10px;border:1px solid #d4dbe6;border-radius:10px;resize:vertical" placeholder="data.events[*]\ndata.schoolCalendar.events[*]"></textarea>
-                                    </label>
-                                    <div style="font-size:11px;color:#64748b;line-height:1.55">若 parseMode=LLM 且能解析为 JSON，命中路径的片段被拼接后再送入 LLM，降低噪声。</div>
-                                </div>
-                            </div>
-                        </fieldset>
-                        <div style="display:flex;gap:14px;justify-content:flex-end">
-                            <button type="button" id="p_taskRunOnce" style="background:#fff;border:1px solid #d4dbe6;padding:10px 22px;border-radius:10px;font-weight:600;cursor:pointer;font-size:12px;color:#0f172a">试运行</button>
-                            <button type="submit" style="background:#0b74de;color:#fff;border:none;padding:10px 28px;border-radius:10px;font-weight:600;cursor:pointer;font-size:12px;box-shadow:0 2px 4px rgba(0,0,0,.15)">保存</button>
-                        </div>
-                    </form>
-                </div>
-            </div>
 </body>
 
 </html>
