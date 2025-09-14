@@ -21,3 +21,10 @@
 提示
 - 首次连接某些服务器时，需要在设置页点击“一键授权”以授予可选的 Host 权限。
 - JSON 映射模式适合已有结构但字段名称不统一的接口；LLM 模式适合自然语言或复杂结构。
+
+Google 日历服务器配置（预览）
+- 在“上传节点”中新建类型选择“Google 日历”。
+- 填写 OAuth Client ID（以及可选的 Client Secret）和 Calendar ID（一般填 `primary` 或你的 Gmail 地址）。
+- 在 Google Cloud 控制台 → 凭据 → OAuth 客户端，将重定向 URI 添加为：`https://<扩展ID>.chromiumapp.org/`（扩展安装后，设置页会显示这串地址）。
+- 保存服务器节点后，点击“Google 授权”，完成账号授权。
+- 注意：需在 `manifest.json` 中声明 `identity` 权限（已内置）与 `https://www.googleapis.com/*` 主机权限；首次联网可能需要“一键授权”授予可选站点权限。

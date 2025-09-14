@@ -9,7 +9,7 @@ import {
   parseLLMTime,
 } from './shared.js';
 import { loadParsers, saveParsers, getParserById, parseWithParser } from './parsers.js';
-import { loadServers, saveServers, getServerById, mergeUploadWithServer } from './servers.js';
+import { loadServers, saveServers, getServerById, mergeUploadWithServer, authorizeServer } from './servers.js';
 
 // -------------------------------------------------
 // 新版多任务模型 (V3)
@@ -389,6 +389,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     (async () => {
       const list = await saveServers(Array.isArray(msg.servers) ? msg.servers : []);
       sendResponse({ ok: true, servers: list });
+    })().catch((e) => sendResponse({ ok: false, error: e.message }));
+    return true;
+  }
+  if (msg?.type === 'AUTHORIZE_SERVER'){
+    (async () => {
+      const id = String(msg.id||''); if(!id) throw new Error('缺少服务器 ID');
+      const r = await authorizeServer(id);
+      sendResponse({ ok: true, ...r });
     })().catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }

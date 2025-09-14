@@ -10,6 +10,7 @@
     "notifications",
     "contextMenus",
     "scripting",
+    "identity",
     "webNavigation"
   ],
   "host_permissions": [
@@ -17,7 +18,8 @@
     "https://my.sjtu.edu.cn/*",
     "http://127.0.0.1:5232/*",
     "http://localhost:5232/*",
-    "https://open.bigmodel.cn/*"
+    "https://open.bigmodel.cn/*",
+    "https://www.googleapis.com/*"
   ],
   "optional_host_permissions": [
     "http://*/*",

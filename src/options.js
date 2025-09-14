@@ -83,6 +83,13 @@ async function init(){
   els.s_radicale_base = qs('s_radicale_base');
   els.s_radicale_username = qs('s_radicale_username');
   els.s_radicale_auth = qs('s_radicale_auth');
+  // google fields
+  els.s_google_clientId = qs('s_google_clientId');
+  els.s_google_clientSecret = qs('s_google_clientSecret');
+  els.s_google_calendarId = qs('s_google_calendarId');
+  els.btnGoogleAuthorize = qs('btnGoogleAuthorize');
+  els.googleRedirectHint = qs('google_redirect_hint');
+  els.googleAuthStatus = qs('googleAuthStatus');
   els.closeServerModal = qs('closeServerModal');
   els._editingServerId = null;
   // modal fields
@@ -149,6 +156,8 @@ async function init(){
   els.addServer?.addEventListener('click', ()=> openServerModal());
   els.closeServerModal?.addEventListener('click', closeServerModal);
   els.serverForm?.addEventListener('submit', submitServerForm);
+  els.server_type?.addEventListener('change', onServerTypeChange);
+  els.btnGoogleAuthorize?.addEventListener('click', onClickGoogleAuthorize);
   els.defaultServerSelect?.addEventListener('change', saveDefaultServerSelection);
   els.closeTaskModal?.addEventListener('click', closeTaskModal);
   els.taskForm?.addEventListener('submit', submitTaskForm);
@@ -693,7 +702,13 @@ function openServerModal(server, all){
   els.s_radicale_base.value = c.base || '';
   els.s_radicale_username.value = c.username || '';
   els.s_radicale_auth.value = c.auth || '';
+  els.s_google_clientId.value = c.clientId || '';
+  els.s_google_clientSecret.value = c.clientSecret || '';
+  els.s_google_calendarId.value = c.calendarId || 'primary';
+  if(els.googleRedirectHint){ els.googleRedirectHint.textContent = `https://${chrome.runtime.id}.chromiumapp.org/`; }
+  if(els.googleAuthStatus){ els.googleAuthStatus.textContent = c.token?.access_token ? '已授权' : '未授权'; }
   els._serversCache = all || null;
+  onServerTypeChange();
   els.serverModal.style.display='flex';
 }
 
@@ -701,10 +716,16 @@ function closeServerModal(){ els.serverModal.style.display='none'; els._editingS
 
 async function submitServerForm(ev){
   ev.preventDefault();
-  const cfg = { base: (els.s_radicale_base.value||'').trim(), username:(els.s_radicale_username.value||'').trim(), auth:(els.s_radicale_auth.value||'').trim() };
+  let cfg = {};
+  const type = els.server_type.value;
+  if(type === 'radicale'){
+    cfg = { base: (els.s_radicale_base.value||'').trim(), username:(els.s_radicale_username.value||'').trim(), auth:(els.s_radicale_auth.value||'').trim() };
+  } else if(type === 'google'){
+    cfg = { clientId: (els.s_google_clientId.value||'').trim(), clientSecret:(els.s_google_clientSecret.value||'').trim() || undefined, calendarId:(els.s_google_calendarId.value||'').trim() || 'primary' };
+  }
   try {
     const list = els._serversCache || await loadServers();
-    const data = { id: els._editingServerId || ('server-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6)), name: els.server_name.value.trim()||'未命名服务器', type: els.server_type.value, config: cfg };
+    const data = { id: els._editingServerId || ('server-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6)), name: els.server_name.value.trim()||'未命名服务器', type, config: cfg };
     const newList = els._editingServerId ? list.map(x=> x.id===data.id? data: x) : [...list, data];
     const saved = await saveServers(newList);
     const current = saved.find(x=> x.id === data.id);
@@ -713,6 +734,24 @@ async function submitServerForm(ev){
     populateServerSelects(saved);
     closeServerModal();
   } catch(e){ alert('保存服务器失败: '+ e.message); }
+}
+
+function onServerTypeChange(){
+  const t = els.server_type?.value || 'radicale';
+  const a = document.getElementById('server_panel_radicale');
+  const b = document.getElementById('server_panel_google');
+  if(a) a.style.display = t==='radicale' ? 'flex':'none';
+  if(b) b.style.display = t==='google' ? 'flex':'none';
+}
+
+async function onClickGoogleAuthorize(){
+  if(!els._editingServerId){ alert('请先保存服务器后再授权'); return; }
+  try {
+    const r = await chrome.runtime.sendMessage({ type:'AUTHORIZE_SERVER', id: els._editingServerId });
+    if(!r?.ok) throw new Error(r.error||'授权失败');
+    if(els.googleAuthStatus) els.googleAuthStatus.textContent = '已授权';
+    alert('Google 授权完成');
+  } catch(e){ alert('授权失败: ' + e.message); }
 }
 
 async function saveDefaultServerSelection(){
@@ -771,9 +810,15 @@ function buildOriginsFromUrl(u){
 }
 
 function buildOriginsForServer(server){
-  if(!server || server.type !== 'radicale') return [];
-  const base = server.config?.base || '';
-  return buildOriginsFromUrl(base);
+  if(!server) return [];
+  if(server.type === 'radicale'){
+    const base = server.config?.base || '';
+    return buildOriginsFromUrl(base);
+  }
+  if(server.type === 'google'){
+    return ['https://www.googleapis.com/*'];
+  }
+  return [];
 }
 
 function buildOriginsForParser(parser){

@@ -314,12 +314,23 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                     <label>类型
                         <select id="server_type">
                             <option value="radicale">Radicale</option>
+                            <option value="google">Google 日历</option>
                         </select>
                     </label>
                     <div id="server_panel_radicale" style="display:flex;flex-direction:column;gap:10px">
                         <label>Base URL<input id="s_radicale_base" type="text" placeholder="http://127.0.0.1:5232" /></label>
                         <label>用户名<input id="s_radicale_username" type="text" placeholder="user" /></label>
                         <label>Authorization(可选)<input id="s_radicale_auth" type="text" placeholder="Basic ..." /></label>
+                    </div>
+                    <div id="server_panel_google" style="display:none;flex-direction:column;gap:10px">
+                        <label>OAuth Client ID<input id="s_google_clientId" type="text" placeholder="xxxxxxxx.apps.googleusercontent.com" /></label>
+                        <label>OAuth Client Secret（可选）<input id="s_google_clientSecret" type="text" placeholder="(可选)" /></label>
+                        <label>Calendar ID<input id="s_google_calendarId" type="text" placeholder="primary 或 someone@gmail.com" /></label>
+                        <div class="note">授权前请在 Google Cloud 控制台的 OAuth 同意屏幕与凭据中，将重定向 URI 添加为：<code id="google_redirect_hint"></code></div>
+                        <div style="display:flex;gap:10px;align-items:center">
+                          <button id="btnGoogleAuthorize" type="button" class="ghost">Google 授权</button>
+                          <span id="googleAuthStatus" style="font-size:12px;color:#64748b"></span>
+                        </div>
                     </div>
                     <div style="display:flex;gap:10px;justify-content:flex-end"><button type="submit" class="primary">保存</button></div>
                 </form>
