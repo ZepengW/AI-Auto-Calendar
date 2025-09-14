@@ -13,6 +13,9 @@ export const DEFAULTS = {
   llmApiKey: '',
   llmProvider: 'zhipu_agent',
   llmAgentId: '1954810625930809344',
+  // Google defaults (dev time). For production prefer Chrome Identity manifest oauth2.
+  googleClientId: '',
+  googleCalendarId: 'primary',
   // 页面解析（fetch 策略下）JSON 直取配置
   pageParseJsonMode: 'llm', // 'llm' | 'json'  -> json 表示直接按路径提取事件，不调用 LLM
   // 多行 JSON 路径，示例： data.events[*]\n data.schoolCalendar.events[*]
@@ -32,7 +35,8 @@ export function getStorageArea() {
 export async function loadSettings() {
   const area = getStorageArea();
   const data = await area.get(null);
-  return { ...DEFAULTS, ...data };
+  const devCfg = await loadPackagedConfig();
+  return { ...DEFAULTS, ...(devCfg||{}), ...data };
 }
 
 export async function saveSettings(patch) {
@@ -106,4 +110,18 @@ export function escapeICSText(s) {
     .replace(/\n/g, '\\n')
     .replace(/, /g, ',')
     .replace(/;/g, '\\;');
+}
+
+// Try load packaged dev config config/dev.json (optional)
+let _cachedDevConfig = undefined;
+export async function loadPackagedConfig(){
+  if(_cachedDevConfig !== undefined) return _cachedDevConfig;
+  try{
+    const url = chrome.runtime.getURL('config/dev.json');
+    const res = await fetch(url);
+    if(!res.ok) { _cachedDevConfig = null; return null; }
+    const json = await res.json();
+    _cachedDevConfig = json && typeof json === 'object' ? json : null;
+    return _cachedDevConfig;
+  } catch{ _cachedDevConfig = null; return null; }
 }

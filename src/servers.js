@@ -207,16 +207,17 @@ function normalizeGoogle(ev){
 
 async function uploadToGoogleCalendar(events, calendarName, server){
   const cfg = server.config || {};
-  const clientId = cfg.clientId;
+  const clientId = cfg.clientId || DEFAULTS.googleClientId;
   const clientSecret = cfg.clientSecret; // optional
-  const calendarId = (cfg.calendarId || 'primary');
+  const fallbackCalendarId = (cfg.calendarId || DEFAULTS.googleCalendarId || 'primary');
   // Try Chrome Identity first (no client_secret required). Requires manifest.oauth2 configured.
   const manifest = (chrome?.runtime?.getManifest?.() || {});
   const hasManifestOauth = !!(manifest.oauth2 && manifest.oauth2.client_id);
   let accessToken = null;
   if(hasManifestOauth && chrome?.identity?.getAuthToken){
+    // Try silent first to avoid prompting every time
     try {
-      accessToken = await getTokenViaChromeIdentity();
+      accessToken = await getTokenViaChromeIdentity({ interactive: false });
     } catch(_){ /* fall back */ }
   }
   if(!accessToken){
@@ -224,8 +225,67 @@ async function uploadToGoogleCalendar(events, calendarName, server){
     const tokenInfo = await ensureGoogleAccessToken(server.id, { clientId, clientSecret, scopes: ['https://www.googleapis.com/auth/calendar'] });
     accessToken = tokenInfo?.access_token || tokenInfo?.accessToken;
   }
+  if(!accessToken && hasManifestOauth && chrome?.identity?.getAuthToken){
+    // Last resort: interactive identity prompt
+    try { accessToken = await getTokenViaChromeIdentity({ interactive: true }); } catch(_){ /* keep null */ }
+  }
   if(!accessToken) throw new Error('未获得访问令牌');
 
+  // Resolve target calendar id: prefer task's calendarName (summary). If missing/failed, fallback to configured id.
+  async function resolveCalendarId(){
+    const name = (calendarName||'').trim();
+    // Use cached mapping if available
+    if(name && cfg.calendarMap && cfg.calendarMap[name]) return cfg.calendarMap[name];
+    if(!name){ return fallbackCalendarId || 'primary'; }
+    // List calendars and search by summary
+    try {
+      let pageToken = undefined;
+      let found = null;
+      do {
+        const url = new URL('https://www.googleapis.com/calendar/v3/users/me/calendarList');
+        url.searchParams.set('maxResults','250');
+        if(pageToken) url.searchParams.set('pageToken', pageToken);
+        const res = await fetch(url.toString(), { headers: { 'Authorization': `Bearer ${accessToken}` } });
+        if(!res.ok) break;
+        const j = await res.json();
+        const items = Array.isArray(j.items)? j.items: [];
+        found = items.find(it => (it.summary||'') === name) || null;
+        pageToken = j.nextPageToken || null;
+      } while(!found && pageToken);
+      if(found && found.id){
+        // cache mapping
+        const newMap = { ...(cfg.calendarMap||{}), [name]: found.id };
+        await updateServerConfig(server.id, { calendarMap: newMap });
+        cfg.calendarMap = newMap; // update local copy
+        return found.id;
+      }
+    } catch(_){ /* fall through to create */ }
+    // Not found: create new calendar
+    try{
+      const body = { summary: name };
+      const res = await fetch('https://www.googleapis.com/calendar/v3/calendars', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if(!res.ok){
+        let detail = '';
+        try{ detail = (await res.text())?.slice(0,300) || ''; } catch(_){ }
+        // fallback: use configured id if creation fails
+        throw new Error('创建日历失败: ' + res.status + (detail? (' '+detail):''));
+      }
+      const j = await res.json();
+      if(j && j.id){
+        const newMap = { ...(cfg.calendarMap||{}), [name]: j.id };
+        await updateServerConfig(server.id, { calendarMap: newMap });
+        cfg.calendarMap = newMap;
+        return j.id;
+      }
+    } catch(e){ /* creation failed -> fallback */ }
+    return fallbackCalendarId || 'primary';
+  }
+
+  const calendarId = await resolveCalendarId();
   // Fetch existing events in time window
   const { min, max } = getMinMaxDates(events);
   const params = new URLSearchParams({ timeMin: toRfc3339(min), timeMax: toRfc3339(max), singleEvents: 'true', maxResults: '2500', orderBy: 'startTime' });
@@ -434,19 +494,23 @@ export async function authorizeServer(serverId){
   const manifest = (chrome?.runtime?.getManifest?.() || {});
   const hasManifestOauth = !!(manifest.oauth2 && manifest.oauth2.client_id);
   if(hasManifestOauth && chrome?.identity?.getAuthToken){
-    await getTokenViaChromeIdentity();
+    await getTokenViaChromeIdentity({ interactive: true });
     return { ok:true };
   }
-  if(!cfg.clientId) throw new Error('请先配置 Client ID 并保存');
-  await ensureGoogleAccessToken(serverId, { clientId: cfg.clientId, clientSecret: cfg.clientSecret, scopes:['https://www.googleapis.com/auth/calendar'] });
+  // Use packaged/default clientId when not provided in server config
+  const clientId = cfg.clientId || DEFAULTS.googleClientId;
+  const clientSecret = cfg.clientSecret; // optional
+  if(!clientId) throw new Error('缺少 Google Client ID：请在 config/dev.json 或 DEFAULTS 中配置');
+  await ensureGoogleAccessToken(serverId, { clientId, clientSecret, scopes:['https://www.googleapis.com/auth/calendar'] });
   return { ok:true };
 }
 
 // ---------------- Chrome Identity token helpers ----------------
-async function getTokenViaChromeIdentity(){
+async function getTokenViaChromeIdentity(opts={}){
+  const interactive = !!opts.interactive;
   return new Promise((resolve, reject)=>{
     try {
-      chrome.identity.getAuthToken({ interactive: true }, (token)=>{
+      chrome.identity.getAuthToken({ interactive }, (token)=>{
         if(chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
         if(!token) return reject(new Error('未获得浏览器身份令牌'));
         resolve(token);

@@ -272,7 +272,6 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                         <label>API URL<input id="p_zhipu_apiUrl" type="text" placeholder="https://open.bigmodel.cn/api/llm-application/open/v3/application/invoke" /></label>
                         <label>API Key<input id="p_zhipu_apiKey" type="text" placeholder="Bearer ..." /></label>
                         <label>Agent ID<input id="p_zhipu_agentId" type="text" placeholder="1954810625930809344" /></label>
-                        <div class="note">提示语与裁剪已移除：输入数据的筛选在“数据获取阶段”按任务 JSON 路径完成。</div>
                     </div>
                     <div id="parser_panel_jsonmap" style="display:none;flex-direction:column;gap:10px">
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
@@ -322,16 +321,13 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                         <label>用户名<input id="s_radicale_username" type="text" placeholder="user" /></label>
                         <label>Authorization(可选)<input id="s_radicale_auth" type="text" placeholder="Basic ..." /></label>
                     </div>
-                    <div id="server_panel_google" style="display:none;flex-direction:column;gap:10px">
-                        <label>OAuth Client ID<input id="s_google_clientId" type="text" placeholder="xxxxxxxx.apps.googleusercontent.com" /></label>
-                        <label>OAuth Client Secret（可选）<input id="s_google_clientSecret" type="text" placeholder="(可选)" /></label>
-                        <label>Calendar ID<input id="s_google_calendarId" type="text" placeholder="primary 或 someone@gmail.com" /></label>
-                        <div class="note">授权前请在 Google Cloud 控制台的 OAuth 同意屏幕与凭据中，将重定向 URI 添加为：<code id="google_redirect_hint"></code></div>
-                        <div style="display:flex;gap:10px;align-items:center">
-                          <button id="btnGoogleAuthorize" type="button" class="ghost">Google 授权</button>
-                          <span id="googleAuthStatus" style="font-size:12px;color:#64748b"></span>
-                        </div>
-                    </div>
+                                        <div id="server_panel_google" style="display:none;flex-direction:column;gap:10px">
+                                                <div class="note">已启用内置开发配置：新增 Google 节点无需填写 Client ID/Calendar ID。授权前请在 Google Cloud 控制台将重定向 URI 添加为：<code id="google_redirect_hint"></code></div>
+                                                <div style="display:flex;gap:10px;align-items:center">
+                                                    <button id="btnGoogleAuthorize" type="button" class="ghost">Google 授权</button>
+                                                    <span id="googleAuthStatus" style="font-size:12px;color:#64748b"></span>
+                                                </div>
+                                        </div>
                     <div style="display:flex;gap:10px;justify-content:flex-end"><button type="submit" class="primary">保存</button></div>
                 </form>
             </div>

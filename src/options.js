@@ -83,10 +83,7 @@ async function init(){
   els.s_radicale_base = qs('s_radicale_base');
   els.s_radicale_username = qs('s_radicale_username');
   els.s_radicale_auth = qs('s_radicale_auth');
-  // google fields
-  els.s_google_clientId = qs('s_google_clientId');
-  els.s_google_clientSecret = qs('s_google_clientSecret');
-  els.s_google_calendarId = qs('s_google_calendarId');
+  // google fields (no user inputs; only authorize/status)
   els.btnGoogleAuthorize = qs('btnGoogleAuthorize');
   els.googleRedirectHint = qs('google_redirect_hint');
   els.googleAuthStatus = qs('googleAuthStatus');
@@ -130,6 +127,8 @@ async function init(){
   els.btnAuthorizeAll = qs('btnAuthorizeAll');
 
   const cfg = await loadSettings();
+  // cache loaded settings (contains DEFAULTS + config/dev.json overrides + saved settings)
+  els._settings = cfg;
   if(els.pageParseEnabled) els.pageParseEnabled.value = cfg.pageParseEnabled ? 'true':'false';
   // lastSync removed from UI
   if(els.pageParseStrategy) els.pageParseStrategy.value = cfg.pageParseStrategy || 'fetch';
@@ -702,11 +701,22 @@ function openServerModal(server, all){
   els.s_radicale_base.value = c.base || '';
   els.s_radicale_username.value = c.username || '';
   els.s_radicale_auth.value = c.auth || '';
-  els.s_google_clientId.value = c.clientId || '';
-  els.s_google_clientSecret.value = c.clientSecret || '';
-  els.s_google_calendarId.value = c.calendarId || 'primary';
+  // No Google input fields; values come from dev config/DEFAULTS in runtime code
   if(els.googleRedirectHint){ els.googleRedirectHint.textContent = `https://${chrome.runtime.id}.chromiumapp.org/`; }
-  if(els.googleAuthStatus){ els.googleAuthStatus.textContent = c.token?.access_token ? '已授权' : '未授权'; }
+  if(els.googleAuthStatus){
+    // Prefer showing Identity status if available
+    try{
+      const manifest = chrome.runtime.getManifest?.() || {};
+      if(manifest.oauth2 && chrome.identity?.getAuthToken){
+        chrome.identity.getAuthToken({ interactive: false }, (tok)=>{
+          if(tok) els.googleAuthStatus.textContent = '已授权(浏览器身份)';
+          else els.googleAuthStatus.textContent = c.token?.access_token ? '已授权' : '未授权';
+        });
+      } else {
+        els.googleAuthStatus.textContent = c.token?.access_token ? '已授权' : '未授权';
+      }
+    } catch{ els.googleAuthStatus.textContent = c.token?.access_token ? '已授权' : '未授权'; }
+  }
   els._serversCache = all || null;
   onServerTypeChange();
   els.serverModal.style.display='flex';
@@ -721,14 +731,33 @@ async function submitServerForm(ev){
   if(type === 'radicale'){
     cfg = { base: (els.s_radicale_base.value||'').trim(), username:(els.s_radicale_username.value||'').trim(), auth:(els.s_radicale_auth.value||'').trim() };
   } else if(type === 'google'){
-    cfg = { clientId: (els.s_google_clientId.value||'').trim(), clientSecret:(els.s_google_clientSecret.value||'').trim() || undefined, calendarId:(els.s_google_calendarId.value||'').trim() || 'primary' };
+    // No user-entered Google fields; rely on packaged config/DEFAULTS at runtime
+    cfg = {};
   }
   try {
     const list = els._serversCache || await loadServers();
-    const data = { id: els._editingServerId || ('server-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6)), name: els.server_name.value.trim()||'未命名服务器', type, config: cfg };
-    const newList = els._editingServerId ? list.map(x=> x.id===data.id? data: x) : [...list, data];
-    const saved = await saveServers(newList);
-    const current = saved.find(x=> x.id === data.id);
+    const id = els._editingServerId || ('server-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6));
+    const name = els.server_name.value.trim()||'未命名服务器';
+    let newList;
+    if(els._editingServerId){
+      const old = list.find(x=> x.id === id);
+      const oldType = old?.type;
+      const oldCfg = old?.config || {};
+      let mergedCfg = { ...oldCfg, ...cfg };
+      // If switching type or changing Google clientId, drop stored token to avoid mismatch
+      if(oldType !== type){ delete mergedCfg.token; }
+      if(type !== 'google'){
+        // Non-google server does not keep google token
+        delete mergedCfg.token;
+      }
+      const data = { id, name, type, config: mergedCfg };
+      newList = list.map(x=> x.id===id? data: x);
+    } else {
+      const data = { id, name, type, config: cfg };
+      newList = [...list, data];
+    }
+  const saved = await saveServers(newList);
+  const current = saved.find(x=> x.id === id);
     if(current){ await requestServerPermissions(current, { silent: true }); }
     renderServers(saved);
     populateServerSelects(saved);
