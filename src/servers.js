@@ -210,10 +210,20 @@ async function uploadToGoogleCalendar(events, calendarName, server){
   const clientId = cfg.clientId;
   const clientSecret = cfg.clientSecret; // optional
   const calendarId = (cfg.calendarId || 'primary');
-  if(!clientId) throw new Error('Google 配置缺少 Client ID');
-  // Ensure access token
-  const tokenInfo = await ensureGoogleAccessToken(server.id, { clientId, clientSecret, scopes: ['https://www.googleapis.com/auth/calendar'] });
-  const accessToken = tokenInfo?.access_token || tokenInfo?.accessToken;
+  // Try Chrome Identity first (no client_secret required). Requires manifest.oauth2 configured.
+  const manifest = (chrome?.runtime?.getManifest?.() || {});
+  const hasManifestOauth = !!(manifest.oauth2 && manifest.oauth2.client_id);
+  let accessToken = null;
+  if(hasManifestOauth && chrome?.identity?.getAuthToken){
+    try {
+      accessToken = await getTokenViaChromeIdentity();
+    } catch(_){ /* fall back */ }
+  }
+  if(!accessToken){
+    if(!clientId) throw new Error('Google 配置缺少 Client ID');
+    const tokenInfo = await ensureGoogleAccessToken(server.id, { clientId, clientSecret, scopes: ['https://www.googleapis.com/auth/calendar'] });
+    accessToken = tokenInfo?.access_token || tokenInfo?.accessToken;
+  }
   if(!accessToken) throw new Error('未获得访问令牌');
 
   // Fetch existing events in time window
@@ -221,11 +231,29 @@ async function uploadToGoogleCalendar(events, calendarName, server){
   const params = new URLSearchParams({ timeMin: toRfc3339(min), timeMax: toRfc3339(max), singleEvents: 'true', maxResults: '2500', orderBy: 'startTime' });
   const listUrl = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?${params}`;
   let listJson;
-  let listRes = await fetch(listUrl, { headers: { 'Authorization': `Bearer ${accessToken}` } });
+  let listRes;
+  try {
+    listRes = await fetch(listUrl, { headers: { 'Authorization': `Bearer ${accessToken}` } });
+  } catch(e){
+    throw new Error('获取 Google 日历事件失败: ' + (e?.message||e));
+  }
   if(listRes.status === 401){
-    const t2 = await refreshGoogleToken(server.id, { clientId, clientSecret });
-    if(!t2?.access_token && !t2?.accessToken) throw new Error('访问令牌已过期且刷新失败');
-    listRes = await fetch(listUrl, { headers: { 'Authorization': `Bearer ${t2.access_token||t2.accessToken}` } });
+    // Try identity refresh path first
+    if(hasManifestOauth && chrome?.identity?.getAuthToken){
+      try {
+        accessToken = await refreshChromeIdentityToken(accessToken);
+        listRes = await fetch(listUrl, { headers: { 'Authorization': `Bearer ${accessToken}` } });
+      } catch(e){ /* fallback below */ }
+    }
+    if(!listRes || listRes.status === 401){
+      const t2 = await refreshGoogleToken(server.id, { clientId, clientSecret });
+      if(!t2?.access_token && !t2?.accessToken) throw new Error('访问令牌已过期且刷新失败');
+      try {
+        listRes = await fetch(listUrl, { headers: { 'Authorization': `Bearer ${t2.access_token||t2.accessToken}` } });
+      } catch(e){
+        throw new Error('获取 Google 日历事件失败(重试): ' + (e?.message||e));
+      }
+    }
   }
   if(!listRes.ok) throw new Error('获取现有事件失败: ' + listRes.status);
   listJson = await listRes.json();
@@ -255,10 +283,28 @@ async function uploadToGoogleCalendar(events, calendarName, server){
       end: { dateTime: toRfc3339(ev.endTime) },
     };
     const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
-    let res = await fetch(url, { method:'POST', headers:{ 'Authorization': `Bearer ${accessToken}`, 'Content-Type':'application/json' }, body: JSON.stringify(body) });
+    let res;
+    try {
+      res = await fetch(url, { method:'POST', headers:{ 'Authorization': `Bearer ${accessToken}`, 'Content-Type':'application/json' }, body: JSON.stringify(body) });
+    } catch(e){
+      throw new Error('创建事件失败: ' + (e?.message||e));
+    }
     if(res.status === 401){
-      const t3 = await refreshGoogleToken(server.id, { clientId, clientSecret });
-      res = await fetch(url, { method:'POST', headers:{ 'Authorization': `Bearer ${t3?.access_token||t3?.accessToken}`, 'Content-Type':'application/json' }, body: JSON.stringify(body) });
+      // identity refresh first
+      if(hasManifestOauth && chrome?.identity?.getAuthToken){
+        try {
+          accessToken = await refreshChromeIdentityToken(accessToken);
+          res = await fetch(url, { method:'POST', headers:{ 'Authorization': `Bearer ${accessToken}`, 'Content-Type':'application/json' }, body: JSON.stringify(body) });
+        } catch(_){ /* fallback */ }
+      }
+      if(!res || res.status === 401){
+        const t3 = await refreshGoogleToken(server.id, { clientId, clientSecret });
+        try {
+          res = await fetch(url, { method:'POST', headers:{ 'Authorization': `Bearer ${t3?.access_token||t3?.accessToken}`, 'Content-Type':'application/json' }, body: JSON.stringify(body) });
+        } catch(e){
+          throw new Error('创建事件失败(重试): ' + (e?.message||e));
+        }
+      }
     }
     if(res.ok) inserted++; else throw new Error('插入事件失败: ' + res.status);
   }
@@ -296,6 +342,7 @@ async function ensureGoogleAccessToken(serverId, { clientId, clientSecret, scope
   }
   // need interactive auth using PKCE
   const codeVerifier = base64url(crypto.getRandomValues(new Uint8Array(32)));
+  const state = base64url(crypto.getRandomValues(new Uint8Array(16)));
   const codeChallenge = await sha256(codeVerifier);
   const redirectUri = getRedirectUri();
   const params = new URLSearchParams({
@@ -307,7 +354,8 @@ async function ensureGoogleAccessToken(serverId, { clientId, clientSecret, scope
     prompt: 'consent',
     include_granted_scopes: 'true',
     code_challenge: codeChallenge,
-    code_challenge_method: 'S256'
+    code_challenge_method: 'S256',
+    state
   });
   const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
   const redirectResp = await new Promise((resolve, reject)=>{
@@ -318,6 +366,8 @@ async function ensureGoogleAccessToken(serverId, { clientId, clientSecret, scope
     });
   });
   const u = new URL(redirectResp);
+  const retState = u.searchParams.get('state');
+  if(retState && retState !== state) throw new Error('授权状态校验失败');
   const code = u.searchParams.get('code');
   if(!code) throw new Error('未获得授权码');
   const tokenParams = new URLSearchParams({
@@ -328,8 +378,26 @@ async function ensureGoogleAccessToken(serverId, { clientId, clientSecret, scope
     code_verifier: codeVerifier
   });
   if(clientSecret) tokenParams.append('client_secret', clientSecret);
-  const tokenRes = await fetch('https://oauth2.googleapis.com/token', { method:'POST', headers:{ 'Content-Type':'application/x-www-form-urlencoded' }, body: tokenParams.toString() });
-  if(!tokenRes.ok) throw new Error('令牌交换失败: ' + tokenRes.status);
+  let tokenRes;
+  try {
+    tokenRes = await fetch('https://oauth2.googleapis.com/token', { method:'POST', headers:{ 'Content-Type':'application/x-www-form-urlencoded' }, body: tokenParams.toString() });
+  } catch(e){
+    throw new Error('令牌交换请求失败: ' + (e?.message||e));
+  }
+  if(!tokenRes.ok){
+    let detail = '';
+    try { const t = await tokenRes.text(); detail = t?.slice(0,300) || ''; } catch(_){ }
+    // If server insists on client_secret (confidential client), try implicit flow (no refresh_token)
+    if(tokenRes.status === 400 && /client[_-]?secret|secret key|missing\s+secret/i.test(detail || '')){
+      const implicit = await getAccessTokenViaImplicit({ clientId, scopes: (scopes||[]) });
+      if(implicit?.access_token){
+        const expires_at = Math.floor(Date.now()/1000) + (Number(implicit.expires_in)||3600) - 30;
+        const saved2 = await updateServerConfig(serverId, { token: { access_token: implicit.access_token, token_type: 'Bearer', expires_in: implicit.expires_in, expires_at } });
+        return saved2?.config?.token || { access_token: implicit.access_token, token_type: 'Bearer', expires_in: implicit.expires_in, expires_at };
+      }
+    }
+    throw new Error('令牌交换失败: '+ tokenRes.status + (detail? (' '+detail):''));
+  }
   const tokenJson = await tokenRes.json();
   const expires_at = Math.floor(Date.now()/1000) + (Number(tokenJson.expires_in)||3600) - 30;
   const saved = await updateServerConfig(serverId, { token: { ...tokenJson, expires_at } });
@@ -342,7 +410,12 @@ async function refreshGoogleToken(serverId, { clientId, clientSecret }){
   if(!refresh) return null;
   const params = new URLSearchParams({ grant_type:'refresh_token', refresh_token: refresh, client_id: clientId });
   if(clientSecret) params.append('client_secret', clientSecret);
-  const res = await fetch('https://oauth2.googleapis.com/token', { method:'POST', headers:{ 'Content-Type':'application/x-www-form-urlencoded' }, body: params.toString() });
+  let res;
+  try {
+    res = await fetch('https://oauth2.googleapis.com/token', { method:'POST', headers:{ 'Content-Type':'application/x-www-form-urlencoded' }, body: params.toString() });
+  } catch(_){
+    return null;
+  }
   if(!res.ok) return null;
   const j = await res.json();
   if(!j.access_token) return null;
@@ -357,7 +430,80 @@ export async function authorizeServer(serverId){
   if(!s) throw new Error('服务器不存在');
   if(s.type !== 'google') throw new Error('仅 Google 服务器需要授权');
   const cfg = s.config || {};
+  // If manifest oauth2 is configured, try identity flow which doesn't require clientId here
+  const manifest = (chrome?.runtime?.getManifest?.() || {});
+  const hasManifestOauth = !!(manifest.oauth2 && manifest.oauth2.client_id);
+  if(hasManifestOauth && chrome?.identity?.getAuthToken){
+    await getTokenViaChromeIdentity();
+    return { ok:true };
+  }
   if(!cfg.clientId) throw new Error('请先配置 Client ID 并保存');
   await ensureGoogleAccessToken(serverId, { clientId: cfg.clientId, clientSecret: cfg.clientSecret, scopes:['https://www.googleapis.com/auth/calendar'] });
   return { ok:true };
+}
+
+// ---------------- Chrome Identity token helpers ----------------
+async function getTokenViaChromeIdentity(){
+  return new Promise((resolve, reject)=>{
+    try {
+      chrome.identity.getAuthToken({ interactive: true }, (token)=>{
+        if(chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+        if(!token) return reject(new Error('未获得浏览器身份令牌'));
+        resolve(token);
+      });
+    } catch(e){ reject(e); }
+  });
+}
+
+async function refreshChromeIdentityToken(prevToken){
+  // Remove cached token then re-acquire silently, fallback to interactive
+  if(prevToken){
+    try { await new Promise((resolve)=> chrome.identity.removeCachedAuthToken({ token: prevToken }, ()=> resolve())); } catch(_){ }
+  }
+  return new Promise((resolve, reject)=>{
+    try {
+      chrome.identity.getAuthToken({ interactive: false }, (token)=>{
+        if(chrome.runtime.lastError || !token){
+          // final attempt interactive
+          chrome.identity.getAuthToken({ interactive: true }, (tok2)=>{
+            if(chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+            if(!tok2) return reject(new Error('未获得浏览器身份令牌'));
+            resolve(tok2);
+          });
+          return;
+        }
+        resolve(token);
+      });
+    } catch(e){ reject(e); }
+  });
+}
+
+// Implicit grant (response_type=token) fallback for public clients (no refresh_token)
+async function getAccessTokenViaImplicit({ clientId, scopes }){
+  try{
+    const redirectUri = getRedirectUri();
+    const params = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: 'token',
+      scope: (scopes||[]).join(' '),
+      include_granted_scopes: 'true',
+      prompt: 'consent'
+    });
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+    const redirectResp = await new Promise((resolve, reject)=>{
+      chrome.identity.launchWebAuthFlow({ url: authUrl, interactive: true }, (redirectUriResp)=>{
+        if(chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+        if(!redirectUriResp) return reject(new Error('授权失败/取消'));
+        resolve(redirectUriResp);
+      });
+    });
+    const u = new URL(redirectResp);
+    const frag = u.hash || '';
+    const sp = new URLSearchParams(frag.startsWith('#')? frag.slice(1) : frag);
+    const access_token = sp.get('access_token');
+    const expires_in = sp.get('expires_in');
+    if(!access_token) return null;
+    return { access_token, expires_in: expires_in ? Number(expires_in) : undefined };
+  } catch(e){ return null; }
 }

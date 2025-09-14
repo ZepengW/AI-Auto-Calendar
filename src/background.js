@@ -110,9 +110,15 @@ function convLegacySingle(s){
 // Basic HTTP wrapper (keeps credentials for SJTU calendar)
 // ------------------------------------------------------
 async function httpFetch(url, opts = {}) {
-  const res = await fetch(url, { credentials: 'include', ...opts });
-  const text = await res.text();
-  return { ok: res.ok, status: res.status, text, url: res.url };
+  // Ensure we have host permission for the target origin in MV3
+  await ensureHostPermissionForUrl(url, true);
+  try {
+    const res = await fetch(url, { credentials: 'include', ...opts });
+    const text = await res.text();
+    return { ok: res.ok, status: res.status, text, url: res.url };
+  } catch(e){
+    throw new Error(`获取失败(${e?.message||e}) -> ${url}`);
+  }
 }
 
 // Fetch user profile (to get account id)
@@ -206,6 +212,30 @@ async function uploadToRadicale(ics, calendarName, settings) {
 
 function buildOriginFromUrl(raw){
   try { const u = new URL(raw); return `${u.protocol}//${u.hostname}${u.port?':'+u.port:''}/*`; } catch(_){ return null; }
+}
+
+// Ensure host permission for a given URL origin (requests if missing)
+async function ensureHostPermissionForUrl(rawUrl, silent=false){
+  try{
+    const origin = buildOriginFromUrl(rawUrl);
+    if(!origin || !chrome.permissions) return true;
+    const has = await new Promise((resolve)=>{
+      try { chrome.permissions.contains({ origins:[origin] }, (ok)=> resolve(!!ok)); } catch(_) { resolve(false); }
+    });
+    if(has) return true;
+    const granted = await new Promise((resolve)=>{
+      try { chrome.permissions.request({ origins:[origin] }, (ok)=> resolve(!!ok)); } catch(_) { resolve(false); }
+    });
+    if(!granted){
+      const msg = '缺少访问权限，请授权站点：' + origin;
+      if(!silent) notifyAll(msg);
+      throw new Error(msg);
+    }
+    return true;
+  } catch(e){
+    if(!silent) notifyAll('请求站点权限失败: ' + (e.message||e));
+    throw e;
+  }
 }
 
 // -----------------------------
@@ -751,6 +781,8 @@ async function runSinglePageTask(task){
   const { calendarName, modeConfig } = task;
   const url = modeConfig.url;
   if(!url) throw new Error('URL 为空');
+  // Request host permission for the task URL before any fetch
+  await ensureHostPermissionForUrl(url);
   // If parserId specified, use parser exclusively
   if (modeConfig.parserId) {
     const parser = await getParserById(modeConfig.parserId);
@@ -956,6 +988,8 @@ function collectEventCandidate(obj, out){
 }
 
 async function capturePageText(targetUrl){
+  // Ensure host permission for the page to capture
+  await ensureHostPermissionForUrl(targetUrl).catch(()=>{});
   const tab = await new Promise((resolve) => {
     chrome.tabs.query({ url: targetUrl }, (tabs) => {
       if(tabs && tabs.length) return resolve(tabs[0]);
@@ -1069,6 +1103,7 @@ async function parseTextViaLLM(rawText){
 // Fallback: direct fetch page HTML (no JS execution). We strip tags to approximate visible text.
 async function fallbackFetchPage(url, log, warn){
   try {
+    await ensureHostPermissionForUrl(url, true);
     const res = await fetch(url, { credentials:'include' });
     if(!res.ok){ warn('fallback fetch status', res.status); return ''; }
     const html = await res.text();

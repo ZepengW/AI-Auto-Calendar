@@ -19,7 +19,8 @@
     "http://127.0.0.1:5232/*",
     "http://localhost:5232/*",
     "https://open.bigmodel.cn/*",
-    "https://www.googleapis.com/*"
+    "https://www.googleapis.com/*",
+    "https://oauth2.googleapis.com/*"
   ],
   "optional_host_permissions": [
     "http://*/*",

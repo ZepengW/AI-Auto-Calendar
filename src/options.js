@@ -816,7 +816,7 @@ function buildOriginsForServer(server){
     return buildOriginsFromUrl(base);
   }
   if(server.type === 'google'){
-    return ['https://www.googleapis.com/*'];
+    return ['https://www.googleapis.com/*', 'https://oauth2.googleapis.com/*'];
   }
   return [];
 }
