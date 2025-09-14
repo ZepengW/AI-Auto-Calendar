@@ -52,6 +52,17 @@
             font-size: 14px
         }
 
+        textarea {
+            padding: 8px 10px;
+            border-radius: 8px;
+            border: 1px solid #d4dbe6;
+            font-size: 13px;
+            line-height: 1.5;
+            resize: vertical;
+        }
+
+        .mono { font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace; }
+
         .row {
             display: flex;
             gap: 18px;
@@ -93,6 +104,13 @@
             margin-top: -6px;
             margin-bottom: 14px
         }
+
+        /* Toggle cards for nicer trigger layout */
+        .toggle-group { display:grid; grid-template-columns: 1fr; gap: 10px; }
+        @media (min-width: 720px){ .toggle-group { grid-template-columns: 1fr 1fr; } }
+        .toggle-card { border:1px solid var(--border); background:#fff; border-radius: 12px; padding: 12px; display:flex; flex-direction:column; gap:10px; }
+        .toggle-head { display:flex; align-items:center; gap:10px; font-size:13px; font-weight:600; color:#0f172a; }
+        .muted { color: var(--muted); }
 
         .badge {
             display: inline-block;
@@ -174,48 +192,59 @@
                     <button id="closeTaskModal" type="button" style="background:#f1f5f9;border:1px solid #d8e2ed;border-radius:8px;padding:6px 14px;cursor:pointer;font-size:13px;font-weight:600;color:#334155">关闭</button>
                 </div>
                 <form id="taskForm" style="display:flex;flex-direction:column;gap:18px">
-                    <div class="row" style="gap:20px;align-items:flex-start">
-                        <label style="flex:1;min-width:180px">任务名称
-                            <input id="task_name" type="text" required style="margin-top:4px">
-                        </label>
-                        <label style="flex:1;min-width:180px">日历名称
-                            <input id="task_calendarName" type="text" placeholder="ICS 名称" required style="margin-top:4px">
-                        </label>
-                        <label style="flex:0.6;min-width:120px">启用
-                            <select id="task_enabled" style="margin-top:4px"><option value="true">是</option><option value="false">否</option></select>
-                        </label>
-                    </div>
                     <fieldset class="cal-fieldset" style="border:1px solid #e1e8f0;padding:16px 18px;border-radius:14px;margin:0;display:flex;flex-direction:column;gap:14px;background:#fafcff">
-                        <legend style="padding:0 8px;font-size:13px;font-weight:600;color:#0f172a">触发方式（可多选）</legend>
-                        <div style="display:flex;flex-direction:column;gap:10px">
-                            <label style="display:flex;align-items:center;gap:10px"><input type="checkbox" id="task_useInterval"> 周期(分钟)
-                                <input id="task_interval" type="number" min="1" placeholder="间隔分钟" style="margin-left:8px;width:120px">
+                        <legend style="padding:0 8px;font-size:13px;font-weight:600;color:#0f172a">任务与触发设置</legend>
+                        <div class="row" style="gap:20px;align-items:flex-start">
+                            <label style="flex:1;min-width:180px">任务名称
+                                <input id="task_name" type="text" required style="margin-top:4px">
                             </label>
-                            <div>
-                                <label style="display:flex;align-items:center;gap:10px"><input type="checkbox" id="task_useTimes"> 指定时间点(HH:mm)</label>
-                                <div id="schedule_times_wrap" style="display:none;flex-direction:column;gap:10px;margin-top:6px">
-                                    <div id="task_times_list" style="display:flex;gap:8px;flex-wrap:wrap"></div>
-                                    <div style="display:flex;gap:10px;flex-wrap:wrap">
-                                        <input id="task_time_input" type="text" placeholder="HH:mm" style="flex:1;min-width:140px;padding:8px 10px;border:1px solid #d4dbe6;border-radius:10px;font-size:13px">
-                                        <button type="button" id="task_time_add" style="background:#0b74de;color:#fff;padding:8px 16px;border:none;border-radius:10px;font-size:12px;font-weight:600;cursor:pointer">添加时间点</button>
-                                    </div>
-                                    <div style="font-size:11px;color:#64748b">触发后自动排入下一天同一时间；例如 08:30 / 14:05</div>
+                            <label style="flex:0.6;min-width:120px">启用
+                                <select id="task_enabled" style="margin-top:4px"><option value="true">是</option><option value="false">否</option></select>
+                            </label>
+                        </div>
+                        <div class="toggle-group">
+                            <div class="toggle-card">
+                                <div class="toggle-head">
+                                    <input type="checkbox" id="task_useInterval">
+                                    <label for="task_useInterval" style="margin:0; gap:8px; display:flex; align-items:center; font-weight:600">周期(分钟)</label>
+                                </div>
+                                <div style="display:flex; align-items:center; gap:10px; margin-top:2px">
+                                    <input id="task_interval" type="number" min="1" placeholder="间隔分钟" style="width:140px">
+                                    <span class="muted" style="font-size:12px">当启用时，按固定间隔触发</span>
                                 </div>
                             </div>
-                            <div>
-                                <label style="display:flex;align-items:center;gap:10px"><input type="checkbox" id="task_visitTrigger"> 访问页面触发</label>
-                                <div id="visit_patterns_wrap" style="display:none;flex-direction:column;gap:6px;margin-top:6px">
-                                    <label>匹配前缀（每行一条，留空则默认使用目标 URL）
-                                        <textarea id="task_visitPatterns" style="margin-top:6px;height:60px;line-height:1.4;font-family:monospace;font-size:12px;padding:8px 10px;border:1px solid #d4dbe6;border-radius:10px;resize:vertical" placeholder="https://my.sjtu.edu.cn/ui/calendar
+                            <div class="toggle-card">
+                                <div class="toggle-head">
+                                    <input type="checkbox" id="task_useTimes">
+                                    <label for="task_useTimes" style="margin:0; font-weight:600">指定时间点(HH:mm)</label>
+                                </div>
+                                <div id="schedule_times_wrap" style="display:none;flex-direction:column;gap:10px;margin-top:4px">
+                                    <div id="task_times_list" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+                                    <div style="display:flex;gap:10px;flex-wrap:wrap">
+                                        <input id="task_time_input" type="text" placeholder="HH:mm" style="flex:1;min-width:140px">
+                                        <button type="button" id="task_time_add" class="sm primary" style="padding:8px 12px;border-radius:8px">添加时间点</button>
+                                    </div>
+                                    <div class="note" style="margin:0">触发后自动排入下一天同一时间；例如 08:30 / 14:05</div>
+                                </div>
+                            </div>
+                            <div class="toggle-card" style="grid-column: 1 / -1">
+                                <div class="toggle-head">
+                                    <input type="checkbox" id="task_visitTrigger">
+                                    <label for="task_visitTrigger" style="margin:0; font-weight:600">访问页面触发</label>
+                                </div>
+                                <div id="visit_patterns_wrap" style="display:none;flex-direction:column;gap:6px;margin-top:4px">
+                                    <label style="margin:0">匹配前缀（每行一条，留空则默认使用目标 URL）
+                                        <textarea id="task_visitPatterns" class="mono" style="margin-top:6px;height:68px" placeholder="https://my.sjtu.edu.cn/ui/calendar
 https://calendar.sjtu.edu.cn/..."></textarea>
                                     </label>
-                                    <div style="font-size:11px;color:#64748b">仅主框架导航触发；按 origin+pathname 前缀匹配，忽略 query。</div>
+                                    <div class="note" style="margin:0">仅主框架导航触发；按 origin+pathname 前缀匹配，忽略 query。</div>
                                 </div>
                             </div>
                         </div>
                     </fieldset>
+
                     <fieldset style="border:1px solid #e1e8f0;padding:16px 18px;border-radius:14px;margin:0;display:flex;flex-direction:column;gap:14px;background:#fafcff">
-                        <legend style="padding:0 8px;font-size:13px;font-weight:600;color:#0f172a">数据获取模式</legend>
+                        <legend style="padding:0 8px;font-size:13px;font-weight:600;color:#0f172a">数据获取</legend>
                         <div style="display:flex;flex-direction:column;gap:14px">
                             <label style="width:220px;font-size:13px">模式
                                 <select id="task_mode" style="margin-top:4px"><option value="HTTP_GET_JSON">HTTP_GET_JSON</option></select>
@@ -224,26 +253,33 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                                 <label>目标 URL
                                     <input id="task_url" type="text" required placeholder="https://..." style="margin-top:4px">
                                 </label>
-                                <label style="width:260px">解析节点（优先）
-                                    <select id="task_parserId" style="margin-top:4px"></select>
-                                </label>
-                                <label style="width:260px">上传服务器
-                                    <select id="task_serverId" style="margin-top:4px"></select>
-                                </label>
                                 <!-- 解析方式由解析节点决定，移除此处的显式选择 -->
                                 <label id="task_jsonPaths_wrap" style="display:block">JSON 路径
-                                    <textarea id="task_jsonPaths" style="margin-top:6px;height:40px;line-height:1.4;font-family:monospace;font-size:12px;padding:8px 10px;border:1px solid #d4dbe6;border-radius:10px;resize:vertical" placeholder="示例(每行一条):\n# 整个 data: data\n# events 数组本身: data.events\n# events 全部元素: data.events[*]\n# events 第 0 条: data.events[0]\n# 校历 events: data.schoolCalendar.events[*]\n# 多来源分多行"></textarea>
+                                    <textarea id="task_jsonPaths" class="mono" style="margin-top:6px;height:56px" placeholder="例如：data.events[*]"></textarea>
                                 </label>
-                                <div style="font-size:11px;color:#64748b;line-height:1.55">
-                                    说明：每行一条轻量路径（不是完整 JSONPath）。支持 <code>key</code> / <code>key[数字]</code> / <code>key[*]</code> / <code>[数字]</code> / <code>[*]</code> 链式。<br>
-                                    展开规则：只有以 <code>[*]</code> 或 <code>[数字]</code> 结尾的路径才会把数组元素逐个加入；否则保留整个数组/对象作为一个片段。<br>
-                                    direct 模式：片段中的对象/数组元素若含 <code>title/startTime/endTime</code>（或别名）即尝试识别事件。<br>
-                                    LLM 模式：片段集合会序列化为精简 JSON 传给模型，降低噪声。<br>
-                                    不支持：条件过滤 / 范围 / 多索引（如 <code>[?()]</code>、<code>[0:5]</code> 等）。<br>
+                                <div class="note" style="margin:0;line-height:1.55">
+                                    说明：对JSON格式的返回结果进行部分内容输入到解析节点进行解析。支持多级嵌套和数据索引。<br>
                                     留空：不裁剪（可能上下文冗余大）。
                                 </div>
                             </div>
                         </div>
+                    </fieldset>
+
+                    <fieldset style="border:1px solid #e1e8f0;padding:16px 18px;border-radius:14px;margin:0;display:flex;flex-direction:column;gap:14px;background:#fafcff">
+                        <legend style="padding:0 8px;font-size:13px;font-weight:600;color:#0f172a">解析节点</legend>
+                        <label style="width:260px">解析节点（可选）
+                            <select id="task_parserId" style="margin-top:4px"></select>
+                        </label>
+                    </fieldset>
+
+                    <fieldset style="border:1px solid #e1e8f0;padding:16px 18px;border-radius:14px;margin:0;display:flex;flex-direction:column;gap:14px;background:#fafcff">
+                        <legend style="padding:0 8px;font-size:13px;font-weight:600;color:#0f172a">上传目标</legend>
+                        <label style="width:260px">上传服务器
+                            <select id="task_serverId" style="margin-top:4px"></select>
+                        </label>
+                        <label style="flex:1;min-width:180px">目标日历名称
+                            <input id="task_calendarName" type="text" placeholder="如 SJTU日历" required style="margin-top:4px">
+                        </label>
                     </fieldset>
                     <div style="display:flex;gap:14px;justify-content:flex-end;margin-top:4px">
                         <button type="button" id="taskRunOnce" style="background:#fff;border:1px solid #d4dbe6;padding:10px 22px;border-radius:10px;font-weight:600;cursor:pointer;color:#0f172a">试运行</button>
