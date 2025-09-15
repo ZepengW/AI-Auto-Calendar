@@ -80,6 +80,7 @@ async function init(){
   els.server_name = qs('server_name');
   els.server_type = qs('server_type');
   // server typed fields
+  els.s_default_calendar_name = qs('s_default_calendar_name');
   els.s_radicale_base = qs('s_radicale_base');
   els.s_radicale_username = qs('s_radicale_username');
   els.s_radicale_auth = qs('s_radicale_auth');
@@ -698,6 +699,7 @@ function openServerModal(server, all){
   els.server_name.value = server?.name || '';
   els.server_type.value = server?.type || 'radicale';
   const c = server?.config || {};
+  if(els.s_default_calendar_name) els.s_default_calendar_name.value = c.defaultCalendarName || '';
   els.s_radicale_base.value = c.base || '';
   els.s_radicale_username.value = c.username || '';
   els.s_radicale_auth.value = c.auth || '';
@@ -734,6 +736,9 @@ async function submitServerForm(ev){
     // No user-entered Google fields; rely on packaged config/DEFAULTS at runtime
     cfg = {};
   }
+  // common: default calendar name
+  const defCal = (els.s_default_calendar_name?.value||'').trim();
+  if(defCal) cfg.defaultCalendarName = defCal;
   try {
     const list = els._serversCache || await loadServers();
     const id = els._editingServerId || ('server-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6));

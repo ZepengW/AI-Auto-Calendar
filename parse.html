@@ -56,6 +56,9 @@
             <option value="">(默认)</option>
           </select>
         </label>
+        <label>日历名称
+          <input id="calendarNameInput" type="text" placeholder="留空则用服务器默认" style="margin-left:6px;min-width:200px;padding:6px 10px;border:1px solid #d0d7e2;border-radius:8px">
+        </label>
         <button id="btnParse" class="primary">解析</button>
         <button id="btnParseDownload" class="outline" title="解析文本并下载为 ICS">解析并下载</button>
         <button id="btnClear" class="outline">清空</button>
@@ -91,7 +94,7 @@
     </section>
     <section id="messageBox" style="display:none"></section>
   </main>
-  <footer>LLM 解析数据不会本地持久化；上传目标 Radicale 日历名称：<code>LLM-Parsed</code></footer>
+  <footer>LLM 解析数据不会本地持久化；上传目标日历名称可在工具栏设置，留空将使用服务器默认。</footer>
   <script type="module" src="src/parse.js"></script>
 </body>
 </html>

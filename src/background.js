@@ -384,7 +384,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
   if (msg?.type === 'UPLOAD_EVENTS') {
-    uploadEventsList(msg.events, msg.serverId)
+    uploadEventsList(msg.events, msg.serverId, msg.calendarName)
       .then((count) => sendResponse({ ok: true, count }))
       .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true;
@@ -539,7 +539,16 @@ chrome.commands?.onCommand.addListener((command) => {
   if (command === 'parse-selection') {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs[0];
-      if (tab?.id) chrome.tabs.sendMessage(tab.id, { type: 'SJTU_CAL_OPEN_PARSE_MODAL_FROM_SELECTION' });
+      if (!tab?.id) return;
+      try {
+        chrome.tabs.sendMessage(tab.id, { type: 'SJTU_CAL_OPEN_PARSE_MODAL_FROM_SELECTION' }, (resp) => {
+          if (chrome.runtime.lastError || !(resp && resp.ok)) {
+            chrome.tabs.create({ url: 'parse.html' });
+          }
+        });
+      } catch(_) {
+        chrome.tabs.create({ url: 'parse.html' });
+      }
     });
   } else if (command === 'sync-now') {
     runSync();
@@ -563,12 +572,28 @@ function createMenus() {
 
 chrome.contextMenus?.onClicked.addListener((info, tab) => {
   if (info.menuItemId === 'sjtu-parse-selection') {
-    chrome.tabs.sendMessage(tab.id, { type: 'SJTU_CAL_OPEN_PARSE_MODAL_FROM_SELECTION' });
+    try {
+      chrome.tabs.sendMessage(tab.id, { type: 'SJTU_CAL_OPEN_PARSE_MODAL_FROM_SELECTION' }, (resp) => {
+        // If content script not present or error, open parse page with selected text prefilled
+        if (chrome.runtime.lastError || !(resp && resp.ok)) {
+          const t = (info.selectionText || '').slice(0, 4000);
+          openParsePageWithText(t);
+        }
+      });
+    } catch(_) {
+      const t = (info.selectionText || '').slice(0, 4000);
+      openParsePageWithText(t);
+    }
   }
   if (info.menuItemId === 'sjtu-sync-now') {
     runSync();
   }
 });
+
+function openParsePageWithText(text){
+  const enc = encodeURIComponent(text || '');
+  chrome.tabs.create({ url: `parse.html#text=${enc}` });
+}
 
 // Choose default parser node when none specified: prefer first configured parser
 async function getDefaultParser() {
@@ -598,12 +623,22 @@ async function parseLLMOnly(rawText) {
   }));
 }
 
-async function uploadEventsList(events, serverId) {
+async function uploadEventsList(events, serverId, calendarName) {
   if (!Array.isArray(events) || !events.length) throw new Error('事件为空');
   const settings = await loadSettings();
+  const toDate = (v)=>{
+    if(v instanceof Date) return v;
+    // try SJTU style then LLM style then ISO
+    const s1 = parseSJTUTime(v); if(s1 instanceof Date) return s1;
+    const s2 = parseLLMTime(v); if(s2 instanceof Date) return s2;
+    const s = (v==null? '' : String(v)).trim();
+    if(!s) return null;
+    const d = new Date(s);
+    return isNaN(d?.getTime?.()) ? null : d;
+  };
   const norm = events.map((ev) => {
-    const s = parseLLMTime(ev.startTimeRaw) || parseSJTUTime(ev.startTime) || (ev.startTime instanceof Date ? ev.startTime : null);
-    const e = parseLLMTime(ev.endTimeRaw) || parseSJTUTime(ev.endTime) || (ev.endTime instanceof Date ? ev.endTime : null);
+    const s = toDate(ev.startTime) || toDate(ev.startTimeRaw);
+    const e = toDate(ev.endTime) || toDate(ev.endTimeRaw);
     return { ...ev, startTime: s, endTime: e };
   });
   // 过滤/校验
@@ -613,7 +648,7 @@ async function uploadEventsList(events, serverId) {
     if (!ev.title || !ev.startTime || !ev.endTime) dropped.push(ev); else valid.push(ev);
   }
   if (!valid.length) throw new Error('全部事件缺少字段或时间格式无法解析');
-  const { total } = await uploadWithSelectedServer(valid, 'LLM-Parsed', serverId);
+  const { total } = await uploadWithSelectedServer(valid, calendarName || 'LLM-Parsed', serverId);
   if (dropped.length) notifyAll(`合并上传 ${valid.length} 条，丢弃 ${dropped.length} 条；当前日历共 ${total} 条`);
   else notifyAll(`合并上传 ${valid.length} 条；当前日历共 ${total} 条`);
   return valid.length;
@@ -839,7 +874,9 @@ async function uploadWithSelectedServer(events, calendarName, serverId){
     let server = null;
     try { server = await getServerById(prefId); } catch(_) {}
     if (server){
-      const r = await mergeUploadWithServer(events, calendarName || 'PAGE-PARSED', server);
+      // Prefer explicit calendarName; if absent, use server defaultCalendarName; fallback to PAGE-PARSED
+      const targetName = (calendarName && calendarName.trim()) || server.config?.defaultCalendarName || 'PAGE-PARSED';
+      const r = await mergeUploadWithServer(events, targetName, server);
       return { total: r.total };
     }
   }

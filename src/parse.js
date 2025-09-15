@@ -91,14 +91,24 @@ async function uploadSelected(){
   if(!idxs.length){ setUploadStatus('未选择事件','error-box'); return; }
   try {
     const picked = idxs.map(i => currentEvents[i]);
-    // 预处理时间
-    const normalized = picked.map(ev=>({
-      ...ev,
-      startTime: parseLLMTime(ev.startTime),
-      endTime: parseLLMTime(ev.endTime)
-    }));
+    // 预处理时间：先 LLM 解析，若失败再尝试 ISO 字符串解析
+    const toDate = (v)=>{
+      if(v instanceof Date) return v;
+      const llm = parseLLMTime(v); if(llm instanceof Date) return llm;
+      const s = (v==null? '' : String(v)).trim();
+      if(!s) return null;
+      // Accept ISO or RFC-like strings
+      const d = new Date(s);
+      return isNaN(d?.getTime?.()) ? null : d;
+    };
+    const normalized = picked.map(ev=>{
+      const s = toDate(ev.startTime || ev.startTimeRaw);
+      const e = toDate(ev.endTime || ev.endTimeRaw);
+      return { ...ev, startTime: s || ev.startTime || ev.startTimeRaw, endTime: e || ev.endTime || ev.endTimeRaw };
+    });
     const serverId = (qs('serverSelect')?.value || '').trim();
-    const res = await chrome.runtime.sendMessage({ type:'UPLOAD_EVENTS', events: normalized, serverId: serverId || undefined });
+    const calendarName = (qs('calendarNameInput')?.value || '').trim() || undefined;
+    const res = await chrome.runtime.sendMessage({ type:'UPLOAD_EVENTS', events: normalized, serverId: serverId || undefined, calendarName });
     if(!res?.ok) throw new Error(res?.error || '上传失败');
     setUploadStatus('上传成功：'+ normalized.length +' 条','success-box');
   } catch(e){
@@ -189,6 +199,14 @@ function bind(){
   document.addEventListener('keydown', (e)=>{
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='enter'){ parseLLM(qs('rawInput').value); }
   });
+  // Read initial text from URL hash if provided (fallback path from context menu)
+  try {
+    const hash = location.hash || '';
+    if(hash.startsWith('#text=')){
+      const txt = decodeURIComponent(hash.slice('#text='.length));
+      if(txt){ const area = qs('rawInput'); if(area){ area.value = txt; } }
+    }
+  } catch(_) { /* ignore */ }
   // Load parsers
   (async () => {
     try {
@@ -215,6 +233,17 @@ function bind(){
         for(const s of list){
           const o = document.createElement('option'); o.value=s.id; o.textContent = `${s.name} (${s.type})`;
           sel.appendChild(o);
+        }
+        // Update calendarNameInput placeholder when server changes
+        sel.addEventListener('change', ()=>{
+          const cur = list.find(x=> x.id === sel.value);
+          const defName = cur?.config?.defaultCalendarName || '';
+          const input = qs('calendarNameInput'); if(input){ input.placeholder = defName ? `留空默认：${defName}` : '留空则用服务器默认'; }
+        });
+        // initial placeholder
+        const first = list[0]; const input = qs('calendarNameInput'); if(input){
+          const defName = first?.config?.defaultCalendarName || '';
+          input.placeholder = defName ? `留空默认：${defName}` : '留空则用服务器默认';
         }
       }
     } catch(_){ /* ignore */ }
