@@ -253,6 +253,24 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                                 <label>目标 URL
                                     <input id="task_url" type="text" required placeholder="https://..." style="margin-top:4px">
                                 </label>
+                                <fieldset class="card" style="border:1px solid var(--border);background:#fff;border-radius:12px;padding:10px 12px">
+                                    <legend style="padding:0 6px;font-size:12px;color:#0f172a">预热访问（先打开页面以刷新登录状态/Cookie）</legend>
+                                    <div style="display:flex;flex-direction:column;gap:10px">
+                                        <label>预热访问 URL（可选）
+                                            <input id="task_warmupUrl" type="text" placeholder="https://... (先访问此页再抓取上面的目标 URL)" style="margin-top:4px">
+                                        </label>
+                                        <div class="row" style="gap:12px;align-items:center">
+                                            <label style="flex:0 0 auto; margin:0; gap:8px; display:flex; align-items:center">
+                                                <input id="task_warmupSilent" type="checkbox" checked>
+                                                <span>静默打开（后台标签）</span>
+                                            </label>
+                                            <label style="flex:0 0 220px; margin:0">等待时长(毫秒)
+                                                <input id="task_warmupWaitMs" type="number" min="0" placeholder="0 (可选额外等待)" style="margin-top:4px">
+                                            </label>
+                                        </div>
+                                        <div class="note" style="margin:0">说明：若填写将先在后台打开该页面，等待加载完成（或超时），可选再延迟一段时间，随后执行 GET 抓取并关闭标签。</div>
+                                    </div>
+                                </fieldset>
                                 <!-- 解析方式由解析节点决定，移除此处的显式选择 -->
                                 <label id="task_jsonPaths_wrap" style="display:block">JSON 路径
                                     <textarea id="task_jsonPaths" class="mono" style="margin-top:6px;height:56px" placeholder="例如：data.events[*]"></textarea>

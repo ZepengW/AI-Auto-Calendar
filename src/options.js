@@ -102,6 +102,9 @@ async function init(){
   els.task_enabled = qs('task_enabled');
   els.task_url = qs('task_url');
   els.task_mode = qs('task_mode');
+  els.task_warmupUrl = qs('task_warmupUrl');
+  els.task_warmupSilent = qs('task_warmupSilent');
+  els.task_warmupWaitMs = qs('task_warmupWaitMs');
   els.task_jsonPaths = qs('task_jsonPaths');
   els.task_jsonPaths_wrap = qs('task_jsonPaths_wrap');
   els.task_parserId = qs('task_parserId');
@@ -272,6 +275,7 @@ function renderTasks(tasks){
         ${t.useInterval ? `<span>间隔 ${t.intervalMinutes||t.interval||60}m</span>`:''}
         ${(t.useTimes || t.scheduleType==='times') ? `<span>时点 ${Array.isArray(t.times)?t.times.join(', '):''}</span>`:''}
         ${t.visitTrigger ? `<span>访问触发</span>`:''}
+        ${t.modeConfig?.warmupUrl ? `<span>预热</span>`:''}
       </div>
       <div style="display:flex;gap:8px">
         <button data-act="run" style="flex:1;background:#0b74de;color:#fff;border:none;padding:6px 0;border-radius:6px;font-size:12px;cursor:pointer">运行</button>
@@ -300,6 +304,9 @@ function openTaskModal(task){
   els.task_enabled.value = task?.enabled? 'true':'false';
   els.task_url.value = task?.modeConfig?.url || task?.url || '';
   els.task_mode.value = 'HTTP_GET_JSON';
+  if(els.task_warmupUrl) els.task_warmupUrl.value = task?.modeConfig?.warmupUrl || '';
+  if(els.task_warmupSilent) els.task_warmupSilent.checked = task?.modeConfig?.warmupSilent !== false; // default true
+  if(els.task_warmupWaitMs) els.task_warmupWaitMs.value = (task?.modeConfig?.warmupWaitMs ?? '');
   els.task_jsonPaths.value = task?.modeConfig?.jsonPaths || task?.jsonPaths || 'data.events[*]';
   // parser selection
   els.task_parserId.value = task?.modeConfig?.parserId || '';
@@ -345,6 +352,9 @@ async function submitTaskForm(ev){
     mode: els.task_mode.value,
     modeConfig: {
       url: els.task_url.value.trim(),
+      warmupUrl: (els.task_warmupUrl?.value||'').trim() || undefined,
+      warmupSilent: !!els.task_warmupSilent?.checked,
+      warmupWaitMs: (function(){ const n = Number(els.task_warmupWaitMs?.value); return Number.isFinite(n)&&n>0 ? Math.floor(n): undefined; })(),
       jsonPaths: els.task_jsonPaths.value.trim(),
       parserId: (els.task_parserId?.value || '').trim() || undefined,
   // parseMode removed: behavior is determined by selected parser or fallback
@@ -798,10 +808,14 @@ async function saveDefaultServerSelection(){
 // Compute missing optional host permissions and toggle banner
 async function checkAndTogglePermBanner(){
   try{
-    const [servers, parsers] = await Promise.all([loadServers(), loadParsers()]);
+    const [servers, parsers, tasksResp] = await Promise.all([
+      loadServers(), loadParsers(), chrome.runtime.sendMessage({ type:'GET_PAGE_TASKS' })
+    ]);
+    const tasks = (tasksResp?.tasks)||[];
     const origins = [
       ...servers.flatMap(buildOriginsForServer),
-      ...parsers.flatMap(buildOriginsForParser)
+      ...parsers.flatMap(buildOriginsForParser),
+      ...tasks.flatMap(t => buildOriginsFromUrl(t?.modeConfig?.url||'').concat(buildOriginsFromUrl(t?.modeConfig?.warmupUrl||'')))
     ];
     const uniq = Array.from(new Set(origins.filter(Boolean)));
     if(!uniq.length){ if(els.permBanner) els.permBanner.style.display='none'; return; }
@@ -812,10 +826,14 @@ async function checkAndTogglePermBanner(){
 
 async function authorizeMissing(){
   try{
-    const [servers, parsers] = await Promise.all([loadServers(), loadParsers()]);
+    const [servers, parsers, tasksResp] = await Promise.all([
+      loadServers(), loadParsers(), chrome.runtime.sendMessage({ type:'GET_PAGE_TASKS' })
+    ]);
+    const tasks = (tasksResp?.tasks)||[];
     const origins = [
       ...servers.flatMap(buildOriginsForServer),
-      ...parsers.flatMap(buildOriginsForParser)
+      ...parsers.flatMap(buildOriginsForParser),
+      ...tasks.flatMap(t => buildOriginsFromUrl(t?.modeConfig?.url||'').concat(buildOriginsFromUrl(t?.modeConfig?.warmupUrl||'')))
     ];
     const res = await ensureHostPermissions(origins, false);
     if(res.ok){ await checkAndTogglePermBanner(); }
@@ -825,10 +843,14 @@ async function authorizeMissing(){
 // Global one-click authorization: gather all needed origins across servers/parsers and request once
 async function authorizeAll(){
   try{
-    const [servers, parsers] = await Promise.all([loadServers(), loadParsers()]);
+    const [servers, parsers, tasksResp] = await Promise.all([
+      loadServers(), loadParsers(), chrome.runtime.sendMessage({ type:'GET_PAGE_TASKS' })
+    ]);
+    const tasks = (tasksResp?.tasks)||[];
     const origins = [
       ...servers.flatMap(buildOriginsForServer),
-      ...parsers.flatMap(buildOriginsForParser)
+      ...parsers.flatMap(buildOriginsForParser),
+      ...tasks.flatMap(t => buildOriginsFromUrl(t?.modeConfig?.url||'').concat(buildOriginsFromUrl(t?.modeConfig?.warmupUrl||'')))
     ];
     const res = await ensureHostPermissions(origins, false);
     if(res.ok){ await checkAndTogglePermBanner(); if(res.granted){ alert('已申请所需站点权限'); } }

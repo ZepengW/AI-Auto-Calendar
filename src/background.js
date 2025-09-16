@@ -78,6 +78,9 @@ function convOldTask(t){
     mode: 'HTTP_GET_JSON',
     modeConfig: {
       url: t.url || '',
+      warmupUrl: t.warmupUrl || undefined,
+      warmupSilent: (t.warmupSilent !== false),
+      warmupWaitMs: (Number(t.warmupWaitMs)||undefined),
       jsonPaths: t.jsonPaths || 'data.events[*]',
       parseMode: t.jsonMode === 'json' ? 'direct':'llm',
     },
@@ -100,6 +103,9 @@ function convLegacySingle(s){
     mode: 'HTTP_GET_JSON',
     modeConfig: {
       url: s.pageParseUrl || '',
+      warmupUrl: undefined,
+      warmupSilent: true,
+      warmupWaitMs: undefined,
       jsonPaths: s.pageParseJsonPaths || 'data.events[*]',
       parseMode: (s.pageParseJsonMode === 'json') ? 'direct':'llm',
     },
@@ -802,6 +808,9 @@ function sanitizeNewTasks(tasks){
     mode: 'HTTP_GET_JSON',
     modeConfig: {
       url: t.modeConfig?.url || t.url || '',
+      warmupUrl: t.modeConfig?.warmupUrl || t.warmupUrl || undefined,
+      warmupSilent: (t.modeConfig?.warmupSilent !== false),
+      warmupWaitMs: (Number(t.modeConfig?.warmupWaitMs)||undefined),
       jsonPaths: t.modeConfig?.jsonPaths || t.jsonPaths || 'data.events[*]',
       parserId: t.modeConfig?.parserId || t.parserId || undefined,
   // parseMode no longer set by UI; keep legacy compatibility if present
@@ -818,6 +827,17 @@ async function runSinglePageTask(task){
   if(!url) throw new Error('URL 为空');
   // Request host permission for the task URL before any fetch
   await ensureHostPermissionForUrl(url);
+  // Optional warmup visit: open a background tab to refresh cookies/login
+  if(modeConfig.warmupUrl){
+    try {
+      await warmupVisit(modeConfig.warmupUrl, {
+        silent: modeConfig.warmupSilent !== false,
+        waitMs: Number(modeConfig.warmupWaitMs)||0,
+      });
+    } catch(e){
+      console.warn('[SJTU] warmupVisit failed', e?.message||e);
+    }
+  }
   // If parserId specified, use parser exclusively
   if (modeConfig.parserId) {
     const parser = await getParserById(modeConfig.parserId);
@@ -864,6 +884,27 @@ async function runSinglePageTask(task){
   const { total: total2 } = await uploadWithSelectedServer(eventsLLM, calendarName, task.serverId);
   notifyAll(`任务 ${calendarName} 完成: +${eventsLLM.length} (总${total2})`);
   return { added: eventsLLM.length, total: total2 };
+}
+
+// Warmup visit: open a tab (inactive by default), wait for load complete or timeout, optional extra wait, then close
+async function warmupVisit(warmUrl, opts){
+  const url = String(warmUrl||'').trim();
+  if(!url) return;
+  await ensureHostPermissionForUrl(url, true);
+  return new Promise((resolve) => {
+    try {
+      const active = (opts?.silent ? false : true);
+      chrome.tabs.create({ url, active }, async (tab) => {
+        if(!tab?.id) return resolve();
+        try {
+          await waitTabComplete(tab.id, 20000).catch(()=>{});
+          const extra = Number(opts?.waitMs)||0; if(extra>0){ await new Promise(r=> setTimeout(r, extra)); }
+        } finally {
+          try { chrome.tabs.remove(tab.id, ()=> resolve()); } catch(_){ resolve(); }
+        }
+      });
+    } catch(_) { resolve(); }
+  });
 }
 
 async function uploadWithSelectedServer(events, calendarName, serverId){

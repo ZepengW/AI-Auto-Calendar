@@ -4,6 +4,17 @@
 // - 'json_mapping': Map fields from JSON list using simple path selection
 import { loadSettings, DEFAULTS, parseLLMTime, parseSJTUTime } from './shared.js';
 
+// Small helper to include a clipped snippet in error messages without flooding the UI
+function buildSnippet(label, text, maxLen = 500) {
+  try {
+    const s = String(text ?? '');
+    const clipped = s.length > maxLen ? (s.slice(0, maxLen) + ` …(已截断, 共${s.length}字)`) : s;
+    return `${label ? label + '：' : ''}${clipped}`;
+  } catch {
+    return '';
+  }
+}
+
 // ---------------- Storage ----------------
 export async function loadParsers() {
   const area = chrome?.storage?.local;
@@ -82,7 +93,10 @@ async function parseViaZhipuAgent(rawText, config, options) {
   const content = json.choices?.[0]?.messages?.content?.msg;
   if (!content) throw new Error('LLM 返回空内容');
   let parsed;
-  try { parsed = JSON.parse(content); } catch { throw new Error('解析 LLM JSON 失败'); }
+  try { parsed = JSON.parse(content); } catch {
+    // Include a clipped snippet of the LLM output to help diagnose parse issues
+    throw new Error('解析 LLM JSON 失败。' + buildSnippet('LLM 输出片段', content));
+  }
   if (!Array.isArray(parsed.events)) throw new Error('事件结构无效');
   const events = parsed.events.map((ev) => ({
     ...ev,
@@ -200,7 +214,10 @@ function getFirst(obj, keys) {
 
 async function parseViaJsonMapping(rawText, config, options = {}) {
   let data;
-  try { data = JSON.parse(String(rawText || '').trim()); } catch { throw new Error('输入不是合法 JSON'); }
+  try { data = JSON.parse(String(rawText || '').trim()); } catch {
+    // On JSON parse errors, include a clipped rawText snippet for easier debugging
+    throw new Error('输入不是合法 JSON。' + buildSnippet('原文片段', rawText));
+  }
   // Locate list
   let items = [];
   if (Array.isArray(data)) items = data;
