@@ -1,6 +1,7 @@
 // Pluggable parser registry and unified parse entrypoints
 // Types supported:
 // - 'zhipu_agent': Call Zhipu Agent API with per-node config
+// - 'chatgpt_agent': 内置提示的 ChatGPT Agent 抽取（model+apiKey）
 // - 'json_mapping': Map fields from JSON list using simple path selection
 import { loadSettings, DEFAULTS, parseLLMTime, parseSJTUTime } from './shared.js';
 
@@ -21,22 +22,24 @@ export async function loadParsers() {
   const data = await area.get(['parsers']);
   const list = Array.isArray(data.parsers) ? data.parsers : [];
   // sanitize basic shape
-  return list.map((p) => ({
-    id: p.id || ('parser-' + Math.random().toString(36).slice(2)),
-    name: p.name || '未命名解析器',
-    type: p.type === 'json_mapping' ? 'json_mapping' : 'zhipu_agent',
-    config: p.config || {},
-  }));
+  return list.map((p) => {
+    let type = p.type;
+    if(type === 'openai_agent') type = 'chatgpt_agent'; // migrate legacy
+    const allowed = ['json_mapping','zhipu_agent','chatgpt_agent'];
+    if(!allowed.includes(type)) type = 'zhipu_agent';
+    return { id: p.id || ('parser-' + Math.random().toString(36).slice(2)), name: p.name || '未命名解析器', type, config: p.config || {} };
+  });
 }
 
 export async function saveParsers(parsers) {
   const area = chrome?.storage?.local;
-  const list = Array.isArray(parsers) ? parsers.map((p) => ({
-    id: p.id || ('parser-' + Math.random().toString(36).slice(2)),
-    name: String(p.name || '未命名解析器'),
-    type: p.type === 'json_mapping' ? 'json_mapping' : 'zhipu_agent',
-    config: typeof p.config === 'object' && p.config ? p.config : {},
-  })) : [];
+  const list = Array.isArray(parsers) ? parsers.map((p) => {
+    let type = p.type;
+    if(type === 'openai_agent') type = 'chatgpt_agent';
+    const allowed = ['json_mapping','zhipu_agent','chatgpt_agent'];
+    if(!allowed.includes(type)) type = 'zhipu_agent';
+    return { id: p.id || ('parser-' + Math.random().toString(36).slice(2)), name: String(p.name || '未命名解析器'), type, config: typeof p.config === 'object' && p.config ? p.config : {} };
+  }) : [];
   await area.set({ parsers: list });
   return list;
 }
@@ -51,6 +54,7 @@ export async function getParserById(id) {
 export async function parseWithParser(rawText, parser, options = {}) {
   if (!parser || !parser.type) throw new Error('解析器无效');
   if (parser.type === 'zhipu_agent') return parseViaZhipuAgent(rawText, parser.config || {}, options);
+  if (parser.type === 'chatgpt_agent') return parseViaChatGPTAgent(rawText, parser.config || {}, options);
   if (parser.type === 'json_mapping') return parseViaJsonMapping(rawText, parser.config || {}, options);
   throw new Error('未知解析器类型 ' + parser.type);
 }
@@ -103,6 +107,60 @@ async function parseViaZhipuAgent(rawText, config, options) {
     startTime: parseLLMTime(ev.startTime),
     endTime: parseLLMTime(ev.endTime),
   })).filter((ev) => ev.title && ev.startTime && ev.endTime);
+  return events;
+}
+
+// --------------- ChatGPT Agent (Built-in Prompt) ---------------
+// Uses provided specialized extraction prompt. Config: { apiKey, model, apiUrl? }
+// If apiUrl omitted, defaults to OpenAI chat completions endpoint.
+async function parseViaChatGPTAgent(rawText, config, options){
+  const settings = await loadSettings();
+  const apiUrl = (config.apiUrl || settings.openaiApiUrl || 'https://api.openai.com/v1/chat/completions');
+  const apiKey = (config.apiKey || settings.openaiApiKey);
+  const model = (config.model || settings.openaiModel || 'gpt-5');
+  if(!apiKey) throw new Error('未配置 API Key');
+  if(!model) throw new Error('未配置模型');
+
+  let inputText = String(rawText||'');
+  const pathsStr = options.jsonPaths || config.jsonPaths;
+  if(pathsStr){
+    const narrowed = narrowTextByJsonPaths(inputText, pathsStr);
+    if(narrowed) inputText = narrowed;
+  }
+
+  const now = new Date();
+  const todayDate = now.toISOString().split('T')[0];
+  const currentTime = now.toTimeString().split(' ')[0];
+
+  const builtPrompt = `你是一个能够提取和格式化日程信息的助手。你的任务是从一段可能包含大量杂乱信息的非结构化文本中，准确识别出有效的日程事件，并将其转换为符合 iCalendar 标准的 JSON 格式（不是 .ics 文件，而是其结构化 JSON 表达，方便程序进一步生成 .ics 上传到 radical 日历服务器）。\n\n【输入可能包含】：\n- 事件名称、日期、开始时间、结束时间、时区\n- 事件描述\n- 事件地点\n- 可能还有与日程无关的杂乱信息（如广告、签名、重复内容）\n- 有时日期或时间会用自然语言描述（例如“明天下午3点”）\n\n【解析要求】：\n1. 从输入文本中提取所有有用的日程信息，忽略无关内容。\n2. 处理时间时，优先解析为 YYYYMMDDTHHMMSSZ 或带时区的 ISO 格式（例如 20250812T090000+0800）。\n3. 对于跨越多天的事件，需要将事件拆分为开始和结束时间点。\n4. 如果某些信息缺失（例如结束时间），保持字段为空字符串或 null。\n5. 如果无法解析出任何有效的日程，返回空的事件列表。\n6. 支持识别相对时间（如“明天”“下周一”），并转为绝对时间（需使用当前日期上下文）。\n7. 注意Title的完整性，比如文本前文出现项目名称需补全。\n\n【输出 JSON 格式要求】：\n顶层对象，包含 events 数组：每个事件包含 title,startTime,endTime,location,description。\n\n【输出要求】：\n- 只输出 JSON，不要包含额外文字或解释。\n- 确保可被 JSON.parse 解析。\n- 多事件按时间顺序排序。\n- 可缺失的字段使用空字符串或 null。\n  下面是需要解析生成JSON的内容，当前日期：${todayDate} 当前时间：${currentTime}。事件包含为下面的信息中：\n`;
+  const body = {
+    model,
+    temperature: 0.2,
+    messages: [
+      { role:'system', content: '专注日程抽取。严格仅输出 {"events":[...]} JSON。' },
+      { role:'user', content: builtPrompt + inputText.slice(0, 8000) }
+    ],
+    response_format: { type: 'json_object' }
+  };
+
+  const resp = await fetch(apiUrl, {
+    method:'POST',
+    headers:{ 'Authorization':'Bearer '+apiKey, 'Content-Type':'application/json' },
+    body: JSON.stringify(body)
+  });
+  if(!resp.ok) throw new Error('ChatGPT Agent 请求失败 '+ resp.status);
+  const json = await resp.json();
+  const content = json.choices?.[0]?.message?.content;
+  if(!content) throw new Error('返回空内容');
+  let parsed;
+  try { parsed = JSON.parse(content); } catch { throw new Error('解析 JSON 失败。'+ buildSnippet('输出片段', content)); }
+  if(!Array.isArray(parsed.events)) throw new Error('事件结构无效');
+  const events = parsed.events.map(ev => ({
+    ...ev,
+    startTime: parseLLMTime(ev.startTime) || parseLLMTime(ev.start_time) || ev.startTime,
+    endTime: parseLLMTime(ev.endTime) || parseLLMTime(ev.end_time) || ev.endTime,
+    description: ev.description
+  })).filter(ev => ev.title && ev.startTime && ev.endTime);
   return events;
 }
 

@@ -319,6 +319,7 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                     <label>类型
                         <select id="parser_type">
                             <option value="zhipu_agent">智谱智能体</option>
+                            <option value="chatgpt_agent">ChatGPT Agent</option>
                             <option value="json_mapping">JSON映射</option>
                         </select>
                     </label>
@@ -326,6 +327,18 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                         <label>API URL<input id="p_zhipu_apiUrl" type="text" placeholder="https://open.bigmodel.cn/api/llm-application/open/v3/application/invoke" /></label>
                         <label>API Key<input id="p_zhipu_apiKey" type="text" placeholder="Bearer ..." /></label>
                         <label>Agent ID<input id="p_zhipu_agentId" type="text" placeholder="1954810625930809344" /></label>
+                    </div>
+                    <div id="parser_panel_chatgpt" style="display:none;flex-direction:column;gap:10px">
+                        <label>API Key<input id="p_chatgpt_apiKey" type="text" placeholder="sk-..." /></label>
+                        <label>模型
+                            <select id="p_chatgpt_model" style="margin-top:4px">
+                                <option value="gpt-5">gpt-5</option>
+                                <option value="gpt-4o">gpt-4o</option>
+                                <option value="gpt-4o-mini">gpt-4o-mini</option>
+                                <option value="o4-mini">o4-mini</option>
+                            </select>
+                        </label>
+                        <div class="note">ChatGPT Agent：内置高质量 Prompt；只需提供 Key 与模型。严格输出结构化日程 JSON。</div>
                     </div>
                     <div id="parser_panel_jsonmap" style="display:none;flex-direction:column;gap:10px">
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">

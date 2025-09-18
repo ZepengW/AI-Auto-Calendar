@@ -53,6 +53,9 @@ async function init(){
   els.p_zhipu_apiUrl = qs('p_zhipu_apiUrl');
   els.p_zhipu_apiKey = qs('p_zhipu_apiKey');
   els.p_zhipu_agentId = qs('p_zhipu_agentId');
+  // chatgpt agent fields
+  els.p_chatgpt_apiKey = qs('p_chatgpt_apiKey');
+  els.p_chatgpt_model = qs('p_chatgpt_model');
   // removed: prompt/jsonPaths for zhipu node
   els.p_json_map_title = qs('p_json_map_title');
   els.p_json_map_location = qs('p_json_map_location');
@@ -569,6 +572,15 @@ function openParserModal(parser, all){
     els.p_zhipu_apiKey.value = c.apiKey || '';
     els.p_zhipu_agentId.value = c.agentId || DEFAULTS.llmAgentId || '';
     showParserPanel('zhipu');
+  } else if(els.parser_type.value === 'chatgpt_agent'){
+    const c = parser?.config || {};
+      els.p_chatgpt_apiKey.value = c.apiKey || '';
+      const cgModel = c.model || DEFAULTS.openaiModel || '';
+      if(cgModel && els.p_chatgpt_model && ![...els.p_chatgpt_model.options].some(o=>o.value===cgModel)){
+        const opt = document.createElement('option'); opt.value=cgModel; opt.textContent=cgModel+' (自定义)'; els.p_chatgpt_model.appendChild(opt);
+      }
+      if(els.p_chatgpt_model) els.p_chatgpt_model.value = cgModel;
+    showParserPanel('chatgpt');
   } else {
     const c = parser?.config || {};
     els.p_json_map_title.value = (c.fieldMap?.title||[]).join(',');
@@ -597,6 +609,8 @@ async function submitParserForm(ev){
   let cfg = {};
   if(type === 'zhipu_agent'){
     cfg = { apiUrl: (els.p_zhipu_apiUrl.value||'').trim(), apiKey:(els.p_zhipu_apiKey.value||'').trim(), agentId:(els.p_zhipu_agentId.value||'').trim() };
+  } else if(type === 'chatgpt_agent'){
+    cfg = { apiKey: (els.p_chatgpt_apiKey.value||'').trim(), model:(els.p_chatgpt_model.value||'').trim() };
   } else if(type === 'json_mapping'){
   cfg = { fieldMap: {
       title: (els.p_json_map_title.value||'').split(',').map(s=>s.trim()).filter(Boolean),
@@ -634,15 +648,18 @@ async function submitParserForm(ev){
 
 function onParserTypeChange(){
   const t = els.parser_type?.value || 'zhipu_agent';
-  if(t === 'zhipu_agent') showParserPanel('zhipu'); else showParserPanel('json');
+  if(t === 'zhipu_agent') showParserPanel('zhipu');
+  else if(t === 'chatgpt_agent') showParserPanel('chatgpt');
+  else showParserPanel('json');
 }
 
 function showParserPanel(kind){
   const a = document.getElementById('parser_panel_zhipu');
   const b = document.getElementById('parser_panel_jsonmap');
-  if(!a||!b) return;
-  a.style.display = kind==='zhipu' ? 'flex' : 'none';
-  b.style.display = kind==='json' ? 'flex' : 'none';
+  const d = document.getElementById('parser_panel_chatgpt');
+  if(a) a.style.display = kind==='zhipu' ? 'flex' : 'none';
+  if(b) b.style.display = kind==='json' ? 'flex' : 'none';
+  if(d) d.style.display = kind==='chatgpt' ? 'flex' : 'none';
 }
 
 // ---------------- Servers management ----------------
@@ -879,7 +896,7 @@ function buildOriginsForServer(server){
 
 function buildOriginsForParser(parser){
   if(!parser) return [];
-  if(parser.type === 'zhipu_agent'){
+  if(parser.type === 'zhipu_agent' || parser.type === 'chatgpt_agent'){
     const apiUrl = parser.config?.apiUrl || '';
     return buildOriginsFromUrl(apiUrl);
   }

@@ -13,6 +13,10 @@ export const DEFAULTS = {
   llmApiKey: '',
   llmProvider: 'zhipu_agent',
   llmAgentId: '1954810625930809344',
+  // OpenAI style defaults
+  openaiApiUrl: 'https://api.openai.com/v1/chat/completions',
+  openaiApiKey: '',
+  openaiModel: 'gpt-5',
   // Google defaults (dev time). For production prefer Chrome Identity manifest oauth2.
   googleClientId: '',
   googleCalendarId: 'primary',
@@ -79,6 +83,12 @@ export function parseSJTUTime(s) {
 export function parseLLMTime(s) {
   if (!s) return null;
   const str = s.trim();
+  // Compact UTC with Z: YYYYMMDDTHHmmssZ
+  let m2 = str.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/);
+  if(m2){
+    const [_, y, mm, d, H, M, S] = m2; // eslint-disable-line no-unused-vars
+    return new Date(`${y}-${mm}-${d}T${H}:${M}:${S}Z`);
+  }
   // 原紧凑格式 YYYYMMDDTHHmmss+ZZZZ
   let m = str.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})([+-]\d{4})$/);
   if (m) {
