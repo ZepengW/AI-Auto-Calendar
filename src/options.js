@@ -56,6 +56,9 @@ async function init(){
   // chatgpt agent fields
   els.p_chatgpt_apiKey = qs('p_chatgpt_apiKey');
   els.p_chatgpt_model = qs('p_chatgpt_model');
+  // bailian
+  els.p_bailian_apiKey = qs('p_bailian_apiKey');
+  els.p_bailian_agentId = qs('p_bailian_agentId');
   // removed: prompt/jsonPaths for zhipu node
   els.p_json_map_title = qs('p_json_map_title');
   els.p_json_map_location = qs('p_json_map_location');
@@ -581,6 +584,11 @@ function openParserModal(parser, all){
       }
       if(els.p_chatgpt_model) els.p_chatgpt_model.value = cgModel;
     showParserPanel('chatgpt');
+  } else if(els.parser_type.value === 'bailian_agent'){
+    const c = parser?.config || {};
+    els.p_bailian_apiKey.value = c.apiKey || '';
+    els.p_bailian_agentId.value = c.agentId || DEFAULTS.bailianAgentId || '';
+    showParserPanel('bailian');
   } else {
     const c = parser?.config || {};
     els.p_json_map_title.value = (c.fieldMap?.title||[]).join(',');
@@ -611,6 +619,8 @@ async function submitParserForm(ev){
     cfg = { apiUrl: (els.p_zhipu_apiUrl.value||'').trim(), apiKey:(els.p_zhipu_apiKey.value||'').trim(), agentId:(els.p_zhipu_agentId.value||'').trim() };
   } else if(type === 'chatgpt_agent'){
     cfg = { apiKey: (els.p_chatgpt_apiKey.value||'').trim(), model:(els.p_chatgpt_model.value||'').trim() };
+  } else if(type === 'bailian_agent'){
+    cfg = { apiKey:(els.p_bailian_apiKey.value||'').trim(), agentId:(els.p_bailian_agentId.value||'').trim()};
   } else if(type === 'json_mapping'){
   cfg = { fieldMap: {
       title: (els.p_json_map_title.value||'').split(',').map(s=>s.trim()).filter(Boolean),
@@ -650,6 +660,7 @@ function onParserTypeChange(){
   const t = els.parser_type?.value || 'zhipu_agent';
   if(t === 'zhipu_agent') showParserPanel('zhipu');
   else if(t === 'chatgpt_agent') showParserPanel('chatgpt');
+  else if(t === 'bailian_agent') showParserPanel('bailian');
   else showParserPanel('json');
 }
 
@@ -657,9 +668,11 @@ function showParserPanel(kind){
   const a = document.getElementById('parser_panel_zhipu');
   const b = document.getElementById('parser_panel_jsonmap');
   const d = document.getElementById('parser_panel_chatgpt');
+  const e = document.getElementById('parser_panel_bailian');
   if(a) a.style.display = kind==='zhipu' ? 'flex' : 'none';
   if(b) b.style.display = kind==='json' ? 'flex' : 'none';
   if(d) d.style.display = kind==='chatgpt' ? 'flex' : 'none';
+  if(e) e.style.display = kind==='bailian' ? 'flex' : 'none';
 }
 
 // ---------------- Servers management ----------------
@@ -896,8 +909,14 @@ function buildOriginsForServer(server){
 
 function buildOriginsForParser(parser){
   if(!parser) return [];
-  if(parser.type === 'zhipu_agent' || parser.type === 'chatgpt_agent'){
-    const apiUrl = parser.config?.apiUrl || '';
+  if(parser.type === 'zhipu_agent' || parser.type === 'chatgpt_agent' || parser.type === 'bailian_agent'){
+    // Fallback to provider defaults when apiUrl not explicitly set on the node
+    let apiUrl = parser.config?.apiUrl || '';
+    if(!apiUrl){
+      if(parser.type === 'zhipu_agent') apiUrl = DEFAULTS.llmApiUrl;
+      else if(parser.type === 'chatgpt_agent') apiUrl = DEFAULTS.openaiApiUrl;
+      else if(parser.type === 'bailian_agent') apiUrl = DEFAULTS.bailianApiUrl;
+    }
     return buildOriginsFromUrl(apiUrl);
   }
   return [];

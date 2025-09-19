@@ -17,6 +17,11 @@ export const DEFAULTS = {
   openaiApiUrl: 'https://api.openai.com/v1/chat/completions',
   openaiApiKey: '',
   openaiModel: 'gpt-5',
+  // Bailian defaults
+  // Use apps completion API base; final endpoint will be `${bailianApiUrl}/{app_id}/completion`
+  bailianApiUrl: 'https://dashscope.aliyuncs.com/api/v1/apps',
+  bailianAgentId: '1ca80897bf214db08d43654aa2264f3d',
+  bailianApiKey: '',
   // Google defaults (dev time). For production prefer Chrome Identity manifest oauth2.
   googleClientId: '',
   googleCalendarId: 'primary',

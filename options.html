@@ -320,6 +320,7 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                         <select id="parser_type">
                             <option value="zhipu_agent">智谱智能体</option>
                             <option value="chatgpt_agent">ChatGPT Agent</option>
+                            <option value="bailian_agent">阿里百炼 Agent</option>
                             <option value="json_mapping">JSON映射</option>
                         </select>
                     </label>
@@ -339,6 +340,11 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                             </select>
                         </label>
                         <div class="note">ChatGPT Agent：内置高质量 Prompt；只需提供 Key 与模型。严格输出结构化日程 JSON。</div>
+                    </div>
+                    <div id="parser_panel_bailian" style="display:none;flex-direction:column;gap:10px">
+                        <label>API Key<input id="p_bailian_apiKey" type="text" placeholder="sk-..." /></label>
+                        <label>App ID<input id="p_bailian_agentId" type="text" placeholder="1ca80897bf214db08d43654aa2264f3d" /></label>
+                        <div class="note">阿里百炼 App：调用 <code>https://dashscope.aliyuncs.com/api/v1/apps/{app_id}/completion</code>，仅需 API Key 与 App ID（可用默认）。请通过“授权”允许 <code>dashscope.aliyuncs.com</code>。</div>
                     </div>
                     <div id="parser_panel_jsonmap" style="display:none;flex-direction:column;gap:10px">
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">

@@ -2,6 +2,7 @@
 // Types supported:
 // - 'zhipu_agent': Call Zhipu Agent API with per-node config
 // - 'chatgpt_agent': 内置提示的 ChatGPT Agent 抽取（model+apiKey）
+// - 'bailian_agent': 阿里百炼 Agent API (agentId + apiKey)
 // - 'json_mapping': Map fields from JSON list using simple path selection
 import { loadSettings, DEFAULTS, parseLLMTime, parseSJTUTime } from './shared.js';
 
@@ -23,9 +24,9 @@ export async function loadParsers() {
   const list = Array.isArray(data.parsers) ? data.parsers : [];
   // sanitize basic shape
   return list.map((p) => {
-    let type = p.type;
+    let type = String(p.type || '').trim();
     if(type === 'openai_agent') type = 'chatgpt_agent'; // migrate legacy
-    const allowed = ['json_mapping','zhipu_agent','chatgpt_agent'];
+  const allowed = ['json_mapping','zhipu_agent','chatgpt_agent','bailian_agent'];
     if(!allowed.includes(type)) type = 'zhipu_agent';
     return { id: p.id || ('parser-' + Math.random().toString(36).slice(2)), name: p.name || '未命名解析器', type, config: p.config || {} };
   });
@@ -34,9 +35,9 @@ export async function loadParsers() {
 export async function saveParsers(parsers) {
   const area = chrome?.storage?.local;
   const list = Array.isArray(parsers) ? parsers.map((p) => {
-    let type = p.type;
+    let type = String(p.type || '').trim();
     if(type === 'openai_agent') type = 'chatgpt_agent';
-    const allowed = ['json_mapping','zhipu_agent','chatgpt_agent'];
+  const allowed = ['json_mapping','zhipu_agent','chatgpt_agent','bailian_agent'];
     if(!allowed.includes(type)) type = 'zhipu_agent';
     return { id: p.id || ('parser-' + Math.random().toString(36).slice(2)), name: String(p.name || '未命名解析器'), type, config: typeof p.config === 'object' && p.config ? p.config : {} };
   }) : [];
@@ -55,6 +56,7 @@ export async function parseWithParser(rawText, parser, options = {}) {
   if (!parser || !parser.type) throw new Error('解析器无效');
   if (parser.type === 'zhipu_agent') return parseViaZhipuAgent(rawText, parser.config || {}, options);
   if (parser.type === 'chatgpt_agent') return parseViaChatGPTAgent(rawText, parser.config || {}, options);
+  if (parser.type === 'bailian_agent') return parseViaBailianAgent(rawText, parser.config || {}, options);
   if (parser.type === 'json_mapping') return parseViaJsonMapping(rawText, parser.config || {}, options);
   throw new Error('未知解析器类型 ' + parser.type);
 }
@@ -154,6 +156,68 @@ async function parseViaChatGPTAgent(rawText, config, options){
   if(!content) throw new Error('返回空内容');
   let parsed;
   try { parsed = JSON.parse(content); } catch { throw new Error('解析 JSON 失败。'+ buildSnippet('输出片段', content)); }
+  if(!Array.isArray(parsed.events)) throw new Error('事件结构无效');
+  const events = parsed.events.map(ev => ({
+    ...ev,
+    startTime: parseLLMTime(ev.startTime) || parseLLMTime(ev.start_time) || ev.startTime,
+    endTime: parseLLMTime(ev.endTime) || parseLLMTime(ev.end_time) || ev.endTime,
+    description: ev.description
+  })).filter(ev => ev.title && ev.startTime && ev.endTime);
+  return events;
+}
+
+// --------------- Bailian Agent (Apps Completion API) ---------------
+// Config: { apiKey, agentId(app_id)?, apiUrl? }
+// Default agentId = '1ca80897bf214db08d43654aa2264f3d'
+// Endpoint: POST https://dashscope.aliyuncs.com/api/v1/apps/{app_id}/completion
+async function parseViaBailianAgent(rawText, config, options){
+  const settings = await loadSettings();
+  const apiKey = (config.apiKey || settings.bailianApiKey);
+  const appId = (config.agentId || settings.bailianAgentId || '1ca80897bf214db08d43654aa2264f3d');
+  const apiBase = (config.apiUrl || settings.bailianApiUrl || 'https://dashscope.aliyuncs.com/api/v1/apps');
+  if(!apiKey) throw new Error('未配置百炼 API Key');
+  if(!appId) throw new Error('未配置百炼 App ID');
+
+  let inputText = String(rawText||'');
+  const pathsStr = options.jsonPaths || config.jsonPaths;
+  if(pathsStr){
+    const narrowed = narrowTextByJsonPaths(inputText, pathsStr);
+    if(narrowed) inputText = narrowed;
+  }
+
+  const now = new Date();
+  const todayDate = now.toISOString().split('T')[0];
+  const currentTime = now.toTimeString().split(' ')[0];
+  const userPrompt = `今天日期 ${todayDate} 当前时间 ${currentTime}，请从以下文本中提取日程事件，仅输出 JSON: {"events":[{"title":"","startTime":"YYYY-MM-DD HH:mm","endTime":"YYYY-MM-DD HH:mm","location":"","description":""}]}. 文本：\n`;
+
+  // Bailian apps completion commonly uses messages-based input
+  const body = {
+    input: {
+      messages: [
+        { role: 'user', content: userPrompt + inputText.slice(0, 6000) }
+      ]
+    }
+  };
+
+  const endpoint = `${apiBase.replace(/\/$/,'')}/${encodeURIComponent(appId)}/completion`;
+  const resp = await fetch(endpoint, {
+    method:'POST',
+    headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+ apiKey },
+    body: JSON.stringify(body)
+  });
+  if(!resp.ok) throw new Error('Bailian 请求失败 '+resp.status);
+  const json = await resp.json();
+  // The content may appear as output.text or choices-like structure depending on app
+  const content = json.output?.text || json.output || json.result || json.data || '';
+  if(!content || typeof content !== 'string') throw new Error('Bailian 返回空内容');
+  let matched = content.trim();
+  matched = matched.replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
+  const braceIdx = matched.indexOf('{');
+  if(braceIdx > 0) matched = matched.slice(braceIdx);
+  let parsed;
+  try { parsed = JSON.parse(matched); } catch {
+    throw new Error('解析 Bailian JSON 失败。'+ buildSnippet('输出片段', matched));
+  }
   if(!Array.isArray(parsed.events)) throw new Error('事件结构无效');
   const events = parsed.events.map(ev => ({
     ...ev,
