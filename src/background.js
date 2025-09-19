@@ -613,7 +613,8 @@ async function parseLLMAndUpload(rawText, serverId) {
   const parser = await getDefaultParser();
   if (!parser) throw new Error('未配置解析节点，请先在设置中添加解析节点');
   const events = await parseWithParser(String(rawText||''), parser, {});
-  const { total } = await uploadWithSelectedServer(events, 'LLM-Parsed', serverId);
+  // 不强制默认名称，留空以便使用服务器节点的 defaultCalendarName 配置
+  const { total } = await uploadWithSelectedServer(events, undefined, serverId);
   return { count: events.length, total };
 }
 
@@ -647,14 +648,15 @@ async function uploadEventsList(events, serverId, calendarName) {
     const e = toDate(ev.endTime) || toDate(ev.endTimeRaw);
     return { ...ev, startTime: s, endTime: e };
   });
-  // 过滤/校验
   const valid = [];
   const dropped = [];
   for (const ev of norm) {
     if (!ev.title || !ev.startTime || !ev.endTime) dropped.push(ev); else valid.push(ev);
   }
   if (!valid.length) throw new Error('全部事件缺少字段或时间格式无法解析');
-  const { total } = await uploadWithSelectedServer(valid, calendarName || 'LLM-Parsed', serverId);
+  // 这里不设置本地默认名称，传递原始 calendarName；
+  // uploadWithSelectedServer 内部会优先使用显式名称，否则使用服务器的 defaultCalendarName，再回退到 'PAGE-PARSED'
+  const { total } = await uploadWithSelectedServer(valid, calendarName, serverId);
   if (dropped.length) notifyAll(`合并上传 ${valid.length} 条，丢弃 ${dropped.length} 条；当前日历共 ${total} 条`);
   else notifyAll(`合并上传 ${valid.length} 条；当前日历共 ${total} 条`);
   return valid.length;

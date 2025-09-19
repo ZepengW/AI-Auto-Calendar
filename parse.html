@@ -30,9 +30,19 @@
     .status-bar{font-size:12px;color:#4d5b6c;display:flex;gap:14px;flex-wrap:wrap}
     footer{padding:14px 18px;font-size:12px;color:#5e7084;background:#f0f4f9;text-align:center}
     .error-box{background:#ffecec;color:#9d1f1f;padding:10px 14px;border:1px solid #f5c4c4;border-radius:8px;font-size:13px}
-    .success-box{background:#e8f9ef;color:#117a32;padding:10px 14px;border:1px solid #b5e9c8;border-radius:8px;font-size:13px}
-    .split{display:flex;flex-direction:column;gap:14px}
-    @media (max-width:1100px){.grid{grid-template-columns:1fr}}
+  .success-box{background:#e8f9ef;color:#117a32;padding:10px 14px;border:1px solid #b5e9c8;border-radius:8px;font-size:13px}
+  .split{display:flex;flex-direction:column;gap:14px}
+  /* Modal styles for viewing raw JSON */
+  .modal{position:fixed;inset:0;background:rgba(16,24,40,0.5);display:none;align-items:center;justify-content:center;z-index:1000}
+  .modal .panel{background:#fff;max-width:800px;width:90%;max-height:80vh;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.2);display:flex;flex-direction:column}
+  .modal .hd{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid #e6edf5}
+  .modal .hd h3{margin:0;font-size:14px}
+  .modal .hd .sp{flex:1}
+  .modal .bd{padding:10px;overflow:auto}
+  .modal pre{margin:0;font-size:12px;line-height:1.5;background:#f7fafc;border:1px solid #e6edf5;border-radius:8px;padding:10px;white-space:pre-wrap;word-break:break-word}
+  .btn-link{background:transparent;border:none;color:#0b74de;cursor:pointer;padding:0 6px;font-size:13px}
+  .btn-mini{background:#fff;border:1px solid #c5d3e2;border-radius:6px;padding:2px 8px;font-size:12px;line-height:18px;height:24px;white-space:nowrap;display:inline-flex;align-items:center;justify-content:center}
+  @media (max-width:1100px){.grid{grid-template-columns:1fr}}
   </style>
 </head>
 <body>
@@ -55,6 +65,9 @@
           <select id="serverSelect" style="margin-left:6px;min-width:220px">
             <option value="">(默认)</option>
           </select>
+        </label>
+        <label style="display:inline-flex;align-items:center;gap:6px">
+          <input type="checkbox" id="jsonModeToggle" /> 输入为 JSON
         </label>
         <label>日历名称
           <input id="calendarNameInput" type="text" placeholder="留空则用服务器默认" style="margin-left:6px;min-width:200px;padding:6px 10px;border:1px solid #d0d7e2;border-radius:8px">
@@ -84,6 +97,7 @@
               <th>开始时间</th>
               <th>结束时间</th>
               <th>地点</th>
+              <th>描述</th>
               <th>原始JSON</th>
             </tr>
           </thead>
@@ -92,6 +106,13 @@
       </div>
       <div id="uploadStatus" style="margin-top:10px"></div>
     </section>
+    <!-- Raw JSON modal -->
+    <div id="rawModal" class="modal">
+      <div class="panel">
+        <div class="hd"><h3>原始 JSON</h3><div class="sp"></div><button id="rawCopy" class="btn-link">复制</button><button id="rawClose" class="btn-link">关闭</button></div>
+        <div class="bd"><pre id="rawContent"></pre></div>
+      </div>
+    </div>
     <section id="messageBox" style="display:none"></section>
   </main>
   <footer>LLM 解析数据不会本地持久化；上传目标日历名称可在工具栏设置，留空将使用服务器默认。</footer>

@@ -8,6 +8,48 @@ function setUploadStatus(html, cls){ const box=qs('uploadStatus'); if(!box) retu
 function showMessage(html, type='info'){ const box=qs('messageBox'); if(!box) return; box.style.display='block'; box.innerHTML = `<div class="${type==='error'?'error-box':'success-box'}">${html}</div>`; setTimeout(()=>{box.style.display='none';}, 8000); }
 
 let currentEvents = [];
+let jsonMode = false; // 当为 true 时，rawInput 直接被当作 JSON 解析
+
+function setJsonMode(on){
+  jsonMode = !!on;
+  const sel = qs('parserSelect');
+  if(sel){ sel.disabled = jsonMode; sel.title = jsonMode? 'JSON 模式下不调用解析节点':''; }
+  const area = qs('rawInput');
+  if(area){
+    area.placeholder = jsonMode ? '请输入 JSON，格式如 {"events":[{"title":"...","startTime":"...","endTime":"...","location":"...","description":"..."}]}' : '在此粘贴或输入要解析的文本，可多行';
+  }
+}
+
+function normalizeJsonEvents(obj){
+  // 支持两种输入：
+  // 1) 顶层 { events: [...] }
+  // 2) 直接是事件数组 [...]
+  let list = [];
+  if(Array.isArray(obj)) list = obj; else if(obj && Array.isArray(obj.events)) list = obj.events; else return [];
+  // 映射到内部统一结构；保留原始字段在 raw 中便于查看
+  return list.map(ev => ({
+    ...ev,
+    title: ev.title || ev.summary || ev.name || '',
+    startTime: parseLLMTime(ev.startTime) || parseLLMTime(ev.start_time) || ev.startTime || ev.start_time || '',
+    endTime: parseLLMTime(ev.endTime) || parseLLMTime(ev.end_time) || ev.endTime || ev.end_time || '',
+    location: ev.location || ev.place || '',
+    description: ev.description,
+    startTimeRaw: ev.startTime || ev.start_time,
+    endTimeRaw: ev.endTime || ev.end_time,
+    raw: ev
+  })).filter(e => e.title && e.startTime && e.endTime);
+}
+
+async function parseJson(raw){
+  const text = String(raw||'').trim();
+  if(!text){ showMessage('请输入 JSON','error'); return; }
+  let obj;
+  try { obj = JSON.parse(text); } catch(e){ showMessage('JSON 解析失败：'+ e.message,'error'); return; }
+  const events = normalizeJsonEvents(obj);
+  currentEvents = events;
+  renderEvents();
+  showMessage('JSON 解析成功，共 '+currentEvents.length+' 条','success');
+}
 
 async function parseLLM(raw){
   const text = raw.trim();
@@ -15,19 +57,23 @@ async function parseLLM(raw){
   setStatus('解析中…');
   qs('btnParse').disabled = true;
   try {
-    const parserId = (qs('parserSelect')?.value || '').trim();
-    let res;
-    if(parserId){
-      const r = await chrome.runtime.sendMessage({ type:'PARSE_TEXT_WITH_PARSER', parserId, text });
-      if(!r?.ok) throw new Error(r?.error||'解析失败');
-      res = { ok:true, events: r.events };
+    if(jsonMode){
+      await parseJson(text);
     } else {
-      res = await chrome.runtime.sendMessage({ type:'PARSE_LLM_ONLY', text });
+      const parserId = (qs('parserSelect')?.value || '').trim();
+      let res;
+      if(parserId){
+        const r = await chrome.runtime.sendMessage({ type:'PARSE_TEXT_WITH_PARSER', parserId, text });
+        if(!r?.ok) throw new Error(r?.error||'解析失败');
+        res = { ok:true, events: r.events };
+      } else {
+        res = await chrome.runtime.sendMessage({ type:'PARSE_LLM_ONLY', text });
+      }
+      if(!res?.ok) throw new Error(res?.error || '解析失败');
+      currentEvents = res.events || [];
+      renderEvents();
+      showMessage('解析成功，共 '+currentEvents.length+' 条','success');
     }
-    if(!res?.ok) throw new Error(res?.error || '解析失败');
-    currentEvents = res.events || [];
-    renderEvents();
-    showMessage('解析成功，共 '+currentEvents.length+' 条','success');
   } catch(e){
     showMessage('解析失败：'+ e.message, 'error');
   } finally {
@@ -43,15 +89,28 @@ function renderEvents(){
   qs('resultCount').textContent = currentEvents.length;
   if(!currentEvents.length){ sec.style.display='none'; return; }
   sec.style.display='block';
+  const toLocalInput = (v)=>{
+    const d = (v instanceof Date) ? v : (v ? new Date(v) : null);
+    if(!d || isNaN(d.getTime())) return '';
+    // datetime-local expects 'YYYY-MM-DDTHH:mm'
+    const pad = (n)=> String(n).padStart(2,'0');
+    const yyyy = d.getFullYear();
+    const mm = pad(d.getMonth()+1);
+    const dd = pad(d.getDate());
+    const HH = pad(d.getHours());
+    const MM = pad(d.getMinutes());
+    return `${yyyy}-${mm}-${dd}T${HH}:${MM}`;
+  };
   currentEvents.forEach((ev, idx) => {
     const tr = ce('tr');
     tr.innerHTML = `
       <td class="select-col"><input type="checkbox" class="rowChk" data-idx="${idx}" checked></td>
       <td><input class="ed-title" data-idx="${idx}" value="${escapeHtml(ev.title||'')}" style="width:160px"></td>
-      <td><input class="ed-start" data-idx="${idx}" value="${escapeHtml(ev.startTimeRaw||ev.startTime||'')}" style="width:150px"></td>
-      <td><input class="ed-end" data-idx="${idx}" value="${escapeHtml(ev.endTimeRaw||ev.endTime||'')}" style="width:150px"></td>
+      <td><input type="datetime-local" class="ed-start" data-idx="${idx}" value="${escapeHtml(toLocalInput(ev.startTime||ev.startTimeRaw))}" style="width:180px"></td>
+      <td><input type="datetime-local" class="ed-end" data-idx="${idx}" value="${escapeHtml(toLocalInput(ev.endTime||ev.endTimeRaw))}" style="width:180px"></td>
       <td><input class="ed-loc" data-idx="${idx}" value="${escapeHtml(ev.location||'')}" style="width:140px"></td>
-      <td><code style="font-size:11px;white-space:pre-wrap;word-break:break-all">${escapeHtml(JSON.stringify(ev))}</code></td>`;
+      <td><input class="ed-desc" data-idx="${idx}" value="${escapeHtml(ev.description||'')}" style="width:200px"></td>
+  <td><button class="btn-view-json btn-mini" data-idx="${idx}">查看</button></td>`;
     tbody.appendChild(tr);
   });
   updateUploadButton();
@@ -80,8 +139,33 @@ function attachTableEvents(){
     }
     if(t.classList.contains('ed-title')) currentEvents[t.dataset.idx].title = t.value.trim();
     if(t.classList.contains('ed-loc')) currentEvents[t.dataset.idx].location = t.value.trim();
-    if(t.classList.contains('ed-start')) currentEvents[t.dataset.idx].startTime = t.value.trim();
-    if(t.classList.contains('ed-end')) currentEvents[t.dataset.idx].endTime = t.value.trim();
+    if(t.classList.contains('ed-desc')) currentEvents[t.dataset.idx].description = t.value;
+    if(t.classList.contains('ed-start')){
+      // datetime-local -> local time; store as Date to避免格式问题
+      const s = String(t.value||'').trim();
+      currentEvents[t.dataset.idx].startTime = s ? new Date(s) : null;
+    }
+    if(t.classList.contains('ed-end')){
+      const s = String(t.value||'').trim();
+      currentEvents[t.dataset.idx].endTime = s ? new Date(s) : null;
+    }
+  });
+  // raw json modal buttons (event delegation for row button)
+  document.addEventListener('click', (e)=>{
+    const t = e.target;
+    if(t.classList?.contains('btn-view-json')){
+      const i = Number(t.dataset.idx);
+      const data = currentEvents[i] || {};
+      const modal = qs('rawModal'); const pre = qs('rawContent');
+      if(modal && pre){ pre.textContent = JSON.stringify(data, null, 2); modal.style.display='flex'; }
+    }
+    if(t.id === 'rawClose'){
+      const modal = qs('rawModal'); if(modal) modal.style.display='none';
+    }
+    if(t.id === 'rawCopy'){
+      const pre = qs('rawContent');
+      try { navigator.clipboard.writeText(pre?.textContent||''); } catch(_){ /* ignore */ }
+    }
   });
 }
 
@@ -199,6 +283,12 @@ function bind(){
   document.addEventListener('keydown', (e)=>{
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='enter'){ parseLLM(qs('rawInput').value); }
   });
+  // JSON 模式开关
+  const jsonToggle = qs('jsonModeToggle');
+  if(jsonToggle){
+    jsonToggle.addEventListener('change', ()=> setJsonMode(jsonToggle.checked));
+    setJsonMode(jsonToggle.checked);
+  }
   // Read initial text from URL hash if provided (fallback path from context menu)
   try {
     const hash = location.hash || '';
