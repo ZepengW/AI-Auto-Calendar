@@ -121,14 +121,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 });
 
-// Keyboard shortcut: Ctrl/Cmd + Shift + P (fallback if commands not working in content)
-window.addEventListener('keydown', (e) => {
-  const mod = navigator.platform.toUpperCase().includes('MAC') ? e.metaKey : e.ctrlKey;
-  if (mod && e.shiftKey && e.key.toLowerCase() === 'p') {
-    const sel = (window.getSelection()?.toString() || '').trim();
-    buildParseModal(sel);
-  }
-});
+// Note: no global keyboard shortcuts are registered here to minimize injection behavior.
 
 function init() {
   injectBase();

@@ -543,19 +543,8 @@ chrome.runtime.onStartup.addListener(() => {
 });
 chrome.commands?.onCommand.addListener((command) => {
   if (command === 'parse-selection') {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const tab = tabs[0];
-      if (!tab?.id) return;
-      try {
-        chrome.tabs.sendMessage(tab.id, { type: 'SJTU_CAL_OPEN_PARSE_MODAL_FROM_SELECTION' }, (resp) => {
-          if (chrome.runtime.lastError || !(resp && resp.ok)) {
-            chrome.tabs.create({ url: 'parse.html' });
-          }
-        });
-      } catch(_) {
-        chrome.tabs.create({ url: 'parse.html' });
-      }
-    });
+    // Commands removed from manifest; keep fallback open parse page
+    chrome.tabs.create({ url: 'parse.html' });
   } else if (command === 'sync-now') {
     runSync();
   }
@@ -566,30 +555,16 @@ function createMenus() {
   if (!chrome.contextMenus) return;
   chrome.contextMenus.create({
     id: 'sjtu-parse-selection',
-    title: 'SJTU: 日程解析',
+    title: '日程解析',
     contexts: ['selection'],
-  });
-  chrome.contextMenus.create({
-    id: 'sjtu-sync-now',
-    title: 'SJTU: 立即同步校历',
-    contexts: ['action'],
   });
 }
 
 chrome.contextMenus?.onClicked.addListener((info, tab) => {
   if (info.menuItemId === 'sjtu-parse-selection') {
-    try {
-      chrome.tabs.sendMessage(tab.id, { type: 'SJTU_CAL_OPEN_PARSE_MODAL_FROM_SELECTION' }, (resp) => {
-        // If content script not present or error, open parse page with selected text prefilled
-        if (chrome.runtime.lastError || !(resp && resp.ok)) {
-          const t = (info.selectionText || '').slice(0, 4000);
-          openParsePageWithText(t);
-        }
-      });
-    } catch(_) {
-      const t = (info.selectionText || '').slice(0, 4000);
-      openParsePageWithText(t);
-    }
+    // Always open parse page with selected text; no in-page modal
+    const t = (info.selectionText || '').slice(0, 4000);
+    openParsePageWithText(t);
   }
   if (info.menuItemId === 'sjtu-sync-now') {
     runSync();
@@ -696,32 +671,20 @@ async function runPageParseScheduled(){
 
 async function runPageParseOnce(url, calendarName){
   const settings = await loadSettings();
-  const strategy = settings.pageParseStrategy || 'fetch'; // fetch | capture
-  let text = '';
-  if(strategy === 'capture') {
-    try {
-      text = await capturePageText(url);
-    } catch(e){
-      notifyAll('页面 capture 失败，回退到直接获取: '+ e.message);
-      text = await fallbackFetchPage(url, console.log, console.warn);
-    }
-  } else {
-    // fetch 模式：直接使用 fallbackFetchPage （无 DOM 执行, 最稳定）
-    text = await fallbackFetchPage(url, console.log, console.warn);
-    // 在 fetch 模式下尝试：若返回似乎是 JSON（或者用户选择 JSON 直取模式），则走 JSON 解析分支
-    const jsonMode = settings.pageParseJsonMode || 'llm';
-    let parsedEvents = null;
-    if(jsonMode === 'json'){
-      // 用户强制 JSON 直取，则先尝试 parse
-      parsedEvents = await tryParseJsonEvents(text, settings);
-    } else if(/^[\s\S]*\{[\s\S]*\}[\s\S]*$/.test(text.trim().slice(0,800))){
-      // 内容看起来像含有 JSON 对象，且用户仍是 llm 模式：可选择仍交给 LLM；此处不自动 JSON 直取
-    }
-    if(parsedEvents){
-      const { total } = await uploadWithSelectedServer(parsedEvents, calendarName || 'PAGE-PARSED', settings.selectedServerId);
-      notifyAll(`页面(JSON)解析完成: 新增 ${parsedEvents.length} 条（合并后总 ${total} 条）`);
-      return { added: parsedEvents.length, total, json: true };
-    }
+  // 统一使用 fetch 策略：直接抓取页面文本（剥离标签）
+  const text = await fallbackFetchPage(url, console.log, console.warn);
+  // 若返回似乎是 JSON（或用户启用 JSON 直取模式），则尝试 JSON 解析
+  const jsonMode = settings.pageParseJsonMode || 'llm';
+  let parsedEvents = null;
+  if(jsonMode === 'json'){
+    parsedEvents = await tryParseJsonEvents(text, settings);
+  } else if(/^[\s\S]*\{[\s\S]*\}[\s\S]*$/.test(text.trim().slice(0,800))){
+    // 看起来像 JSON：仍交给 LLM，保持现有策略
+  }
+  if(parsedEvents){
+    const { total } = await uploadWithSelectedServer(parsedEvents, calendarName || 'PAGE-PARSED', settings.selectedServerId);
+    notifyAll(`页面(JSON)解析完成: 新增 ${parsedEvents.length} 条（合并后总 ${total} 条）`);
+    return { added: parsedEvents.length, total, json: true };
   }
   const events = await parseTextViaLLM(text);
   const { total } = await uploadWithSelectedServer(events, calendarName || 'PAGE-PARSED', settings.selectedServerId);
@@ -1067,98 +1030,7 @@ function collectEventCandidate(obj, out){
   });
 }
 
-async function capturePageText(targetUrl){
-  // Ensure host permission for the page to capture
-  await ensureHostPermissionForUrl(targetUrl).catch(()=>{});
-  const tab = await new Promise((resolve) => {
-    chrome.tabs.query({ url: targetUrl }, (tabs) => {
-      if(tabs && tabs.length) return resolve(tabs[0]);
-      chrome.tabs.create({ url: targetUrl, active: false }, (t) => resolve(t));
-    });
-  });
-  if(!tab?.id) throw new Error('无法创建/获取标签');
-  await waitTabComplete(tab.id, 20000);
-  let text = '';
-  const traceId = 'PP-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,6);
-  const started = performance.now?.() || Date.now();
-  const log = (...args) => console.log('[PageParse]', traceId, ...args);
-  const warn = (...args) => console.warn('[PageParse]', traceId, ...args);
-  log('Begin capturePageText', { targetUrl, tabId: tab.id, status: tab.status });
-
-  const sendCapture = (phase) => new Promise((resolve, reject) => {
-    const t0 = performance.now?.() || Date.now();
-    try {
-      chrome.tabs.sendMessage(tab.id, { type:'SJTU_CAL_CAPTURE_TEXT', _trace: traceId, _phase: phase }, (resp) => {
-        const elapsed = (performance.now?.() || Date.now()) - t0;
-        if(chrome.runtime.lastError){
-          warn(phase, 'lastError', chrome.runtime.lastError.message, 'elapsed(ms)=', elapsed);
-          return reject(new Error(chrome.runtime.lastError.message));
-        }
-        if(!resp){
-          warn(phase, 'no response object', 'elapsed(ms)=', elapsed);
-          return reject(new Error('无响应对象'));
-        }
-        if(!resp.ok){
-          warn(phase, 'resp not ok', resp.error, 'elapsed(ms)=', elapsed);
-          return reject(new Error(resp.error || '采集失败'));
-        }
-        log(phase, 'success length=', (resp.text||'').length, 'elapsed(ms)=', elapsed);
-        resolve(resp.text || '');
-      });
-    } catch(e){
-      warn(phase, 'sendMessage threw', e.message);
-      reject(e);
-    }
-  });
-
-  try {
-    text = await sendCapture('first');
-  } catch(e){
-    // 可能 content script 未注入 => 动态注入再试一次
-    if(e.message && e.message.includes('Could not establish connection')){
-      log('Need dynamic inject content script because first attempt failed:', e.message);
-      try {
-        await chrome.scripting.executeScript({ target:{ tabId: tab.id }, files:['src/content.js'] });
-        log('Dynamic inject done, retrying');
-        text = await sendCapture('retry');
-      } catch(e2){
-        warn('retry failed', e2.message, 'attempting frame enumeration');
-        // 多 frame 注入再试一次
-        try {
-          const frames = await new Promise((resolve) => {
-            try { chrome.webNavigation.getAllFrames({ tabId: tab.id }, resolve); } catch(_){ resolve([]); }
-          });
-          if(Array.isArray(frames) && frames.length){
-            log('Enumerated frames count=', frames.length);
-            for(const f of frames){
-              try {
-                await chrome.scripting.executeScript({ target:{ tabId: tab.id, frameIds:[f.frameId] }, files:['src/content.js'] });
-              } catch(frameErr){ warn('inject frame failed', f.frameId, frameErr.message); }
-            }
-            try {
-              text = await sendCapture('retry-frames');
-            } catch(e3){
-              warn('retry-frames failed', e3.message, 'fallback to direct fetch');
-              text = await fallbackFetchPage(targetUrl, log, warn);
-            }
-          } else {
-            warn('no frames enumerated, fallback to direct fetch');
-            text = await fallbackFetchPage(targetUrl, log, warn);
-          }
-        } catch(enumErr){
-          warn('frame enumeration failed', enumErr.message, 'fallback to direct fetch');
-          text = await fallbackFetchPage(targetUrl, log, warn);
-        }
-      }
-    } else {
-      warn('first attempt failed (non-inject reason)', e.message);
-      throw e;
-    }
-  }
-  const totalElapsed = (performance.now?.() || Date.now()) - started;
-  log('Finished capturePageText, final length=', text.length, 'totalElapsed(ms)=', totalElapsed);
-  return text;
-}
+// capturePageText removed: use fallbackFetchPage instead
 
 function waitTabComplete(tabId, timeoutMs){
   const start = Date.now();
