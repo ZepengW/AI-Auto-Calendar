@@ -8,13 +8,12 @@
 
 适合会议/课表/活动公告等“非结构化文本”“半结构化接口”的快速落地与自动同步。
 
+源码与文档（GitHub）：https://github.com/ZepengW/AI-Auto-Calendar
+
 — 案例直达 —
-- 案例 1：任意文本→LLM 解析→上传到日历服务器（粘贴即用）
-	- docs/tutorials/01-free-text-llm.md
-- 案例 2：在网页中选中一段文本→右键解析并上传
-	- docs/tutorials/02-web-selection.md
-- 案例 3：HTTP 自动化拉取结构化数据（以上海交通大学“交我办日历”为例）→JSON 映射→同步
-	- docs/tutorials/03-http-json-sjtu.md
+ - [案例 1：任意文本→LLM 解析→上传到日历服务器（粘贴即用）](docs/tutorials/01-free-text-llm.md)
+ - [案例 2：在网页中选中一段文本→右键解析并上传](docs/tutorials/02-web-selection.md)
+ - [案例 3：HTTP 自动化拉取结构化数据（以上海交通大学“交我办日历”为例）→JSON 映射→同步](docs/tutorials/03-http-json-sjtu.md)
 
 
 ## 功能特性
@@ -51,8 +50,8 @@
 
 
 ## 首次配置（必读）
-1) 新建“上传服务器”节点（选一种）：
-	 - Radicale：填写 `base`（如 `http://127.0.0.1:5232`）、`username`、`auth`（Basic 令牌，留空则匿名）。
+1) 新建“上传服务器”节点（选一种或多种）：
+	 - Radicale：填写 `base`（如 `http://127.0.0.1:5232`）、`username`、`auth`（Basic 令牌，留空则表示无须鉴权）。
 	 - Google：保存后点击“Google 授权”（支持 Manifest Identity 或 OAuth2 PKCE），授权成功后可向目标日历写入事件。
 	 - 可在“默认服务器”下拉框选择日常使用的目标。
 2) 新建“解析节点”（选一种或多种）：
@@ -65,13 +64,13 @@
 - 粘贴任意文本并上传
 	1. 打开 `parse.html`，粘贴文本 → 选择解析节点/服务器 → 点击“解析”。
 	2. 如有需要，在表格中修订标题/时间/地点 → “上传所选”或“下载 ICS”。
-	3. 详见 docs/tutorials/01-free-text-llm.md
+	3. 详见：[docs/tutorials/01-free-text-llm.md](docs/tutorials/01-free-text-llm.md)
 - 网页中框选一段内容解析
 	1. 在网页选中一段邀请/活动文本 → 右键“日程解析”。
-	2. 跳转解析页后同上操作。详见 docs/tutorials/02-web-selection.md
+	2. 跳转解析页后同上操作。详见：[docs/tutorials/02-web-selection.md](docs/tutorials/02-web-selection.md)
 - HTTP 自动化拉取并同步（结构化接口）
 	1. 设置 JSON 映射解析节点；新建“任务”，填入接口 URL、JSON 路径、调度方式与服务器。
-	2. 任务按计划拉取 → 解析 → 合并上传。详见 docs/tutorials/03-http-json-sjtu.md
+	2. 任务按计划拉取 → 解析 → 合并上传。详见：[docs/tutorials/03-http-json-sjtu.md](docs/tutorials/03-http-json-sjtu.md)
 
 
 ## 权限与隐私
@@ -79,7 +78,13 @@
 - 存储：所有本地配置保存在 `chrome.storage.local`，不上传到任何第三方。
 - 网络：仅在你发起的解析/任务执行时访问配置的 API/页面。Google 授权令牌（若启用）保存在扩展本地配置中。
 
-详细权限用途说明（上架材料）：`docs/permissions.md`
+详细权限用途说明（上架材料）：[docs/permissions.md](docs/permissions.md)
+
+隐私权政策（Privacy Policy）：
+- [docs/privacy-policy.md](docs/privacy-policy.md)
+
+反馈与支持：
+- 问题反馈（Issues）：https://github.com/ZepengW/AI-Auto-Calendar/issues
 
 
 ## 常见问题（FAQ）
@@ -96,15 +101,6 @@
 	- 进入设置页顶部点击“申请所需站点权限”。
 
 
-## 开发与贡献
-- 代码风格：`eslint` + `prettier`
-- 快速检查：
-	- `npm run lint`
-	- `npm run check-format`
-- 构建：当前为纯 MV3 原生脚本，无打包步骤。
-
 
 ## 许可
 本项目仅供学习与个人使用，请遵循目标站点/服务的使用条款与数据合规要求。
-
-— 完整案例请见 `docs/tutorials/` 目录。
