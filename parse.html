@@ -67,8 +67,10 @@
           </select>
         </label>
         <label style="display:inline-flex;align-items:center;gap:6px">
-          <input type="checkbox" id="jsonModeToggle" /> 输入为 JSON
+          <input type="checkbox" id="icsModeToggle" /> 输入为 ICS
         </label>
+        <button id="btnImportIcs" class="outline" style="display:none">导入 ICS 文件</button>
+        <input type="file" id="icsFileInput" accept=".ics,text/calendar" style="display:none" />
         <label>日历名称
           <input id="calendarNameInput" type="text" placeholder="留空则用服务器默认" style="margin-left:6px;min-width:200px;padding:6px 10px;border:1px solid #d0d7e2;border-radius:8px">
         </label>

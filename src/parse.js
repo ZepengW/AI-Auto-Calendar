@@ -1,4 +1,4 @@
-import { loadSettings, DEFAULTS, parseLLMTime, ensureCalendarPayload } from './shared.js';
+import { loadSettings, DEFAULTS, parseLLMTime, ensureCalendarPayload, unescapeICSText } from './shared.js';
 
 function qs(id){ return document.getElementById(id); }
 function ce(tag, props={}){ const el=document.createElement(tag); Object.assign(el, props); return el; }
@@ -9,7 +9,7 @@ function showMessage(html, type='info'){ const box=qs('messageBox'); if(!box) re
 
 let currentPayload = { events: [], icsText: '', calendarName: '' };
 let currentEvents = [];
-let jsonMode = false; // 当为 true 时，rawInput 直接被当作 JSON 解析
+let icsMode = false; // 当为 true 时，rawInput 直接当作 ICS 源处理
 let settingsCache = null;
 let parsersCache = [];
 let serversCache = [];
@@ -103,45 +103,57 @@ function buildEventIcsSnippet(event){
   return match ? match[0] : text;
 }
 
-function setJsonMode(on){
-  jsonMode = !!on;
+function setIcsMode(on){
+  icsMode = !!on;
   const sel = qs('parserSelect');
-  if(sel){ sel.disabled = jsonMode; sel.title = jsonMode? 'JSON 模式下不调用解析节点':''; }
+  if(sel){
+    sel.disabled = icsMode;
+    sel.title = icsMode ? 'ICS 模式下不调用解析节点' : '';
+  }
   const area = qs('rawInput');
   if(area){
-    area.placeholder = jsonMode ? '请输入 JSON，格式如 {"events":[{"title":"...","startTime":"...","endTime":"...","location":"...","description":"..."}]}' : '在此粘贴或输入要解析的文本，可多行';
+    area.placeholder = icsMode
+      ? '请输入 ICS 文本（以 BEGIN:VCALENDAR 开头），或使用“导入 ICS 文件”按钮'
+      : '在此粘贴或输入要解析的文本，可多行';
+  }
+  const btnImport = qs('btnImportIcs');
+  if(btnImport){
+    btnImport.style.display = icsMode ? 'inline-flex' : 'none';
   }
 }
 
-function normalizeJsonEvents(obj){
-  // 支持两种输入：
-  // 1) 顶层 { events: [...] }
-  // 2) 直接是事件数组 [...]
-  let list = [];
-  if(Array.isArray(obj)) list = obj; else if(obj && Array.isArray(obj.events)) list = obj.events; else return [];
-  // 映射到内部统一结构；保留原始字段在 raw 中便于查看
-  return list.map(ev => ({
-    ...ev,
-    title: ev.title || ev.summary || ev.name || '',
-    startTime: parseLLMTime(ev.startTime) || parseLLMTime(ev.start_time) || ev.startTime || ev.start_time || '',
-    endTime: parseLLMTime(ev.endTime) || parseLLMTime(ev.end_time) || ev.endTime || ev.end_time || '',
-    location: ev.location || ev.place || '',
-    description: ev.description,
-    startTimeRaw: ev.startTime || ev.start_time,
-    endTimeRaw: ev.endTime || ev.end_time,
-    raw: ev
-  })).filter(e => e.title && e.startTime && e.endTime);
+function findCalendarNameInIcs(icsText){
+  if(typeof icsText !== 'string') return '';
+  const unfolded = icsText.replace(/\r\n/g, '\n').replace(/\n[ \t]/g, '');
+  const match = unfolded.match(/X-WR-CALNAME:(.+)/i);
+  if(match){
+    return unescapeICSText(match[1].trim());
+  }
+  return '';
 }
 
-async function parseJson(raw){
+async function parseIcsText(raw){
   const text = String(raw||'').trim();
-  if(!text){ showMessage('请输入 JSON','error'); return; }
-  let obj;
-  try { obj = JSON.parse(text); } catch(e){ showMessage('JSON 解析失败：'+ e.message,'error'); return; }
-  const events = normalizeJsonEvents(obj);
-  applyPayload({ events, calendarName: 'JSON-Manual' }, 'JSON-Manual');
-  renderEvents();
-  showMessage('JSON 解析成功，共 '+currentEvents.length+' 条','success');
+  if(!text){ showMessage('请输入 ICS 文本','error'); return; }
+  try {
+    const area = qs('rawInput'); if(area) area.value = text;
+    const calendarName = findCalendarNameInIcs(text) || 'ICS-Manual';
+    const payload = ensureCalendarPayload({ icsText: text, rawIcsText: text, calendarName }, { calendarName });
+    applyPayload(payload, calendarName);
+    renderEvents();
+    showMessage('载入 ICS 成功，共 '+ currentEvents.length +' 条','success');
+  } catch(e){
+    showMessage('解析 ICS 失败：'+ e.message,'error');
+  }
+}
+
+function readFileAsText(file){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = ()=> resolve(typeof reader.result === 'string' ? reader.result : String(reader.result||''));
+    reader.onerror = ()=> reject(reader.error || new Error('读取文件失败'));
+    reader.readAsText(file, 'utf-8');
+  });
 }
 
 async function parseLLM(raw){
@@ -150,8 +162,8 @@ async function parseLLM(raw){
   setStatus('解析中…');
   qs('btnParse').disabled = true;
   try {
-    if(jsonMode){
-      await parseJson(text);
+    if(icsMode){
+      await parseIcsText(text);
     } else {
       const parserId = (qs('parserSelect')?.value || '').trim();
       let resp;
@@ -451,12 +463,41 @@ async function init(){
     if((e.metaKey||e.ctrlKey) && e.key.toLowerCase()==='enter'){ parseLLM(qs('rawInput').value); }
   });
 
-  const jsonToggle = qs('jsonModeToggle');
-  if(jsonToggle){
-    jsonToggle.addEventListener('change', ()=> setJsonMode(jsonToggle.checked));
-    setJsonMode(jsonToggle.checked);
+  const icsToggle = qs('icsModeToggle');
+  if(icsToggle){
+    icsToggle.addEventListener('change', ()=> setIcsMode(icsToggle.checked));
+    setIcsMode(icsToggle.checked);
   } else {
-    setJsonMode(false);
+    setIcsMode(false);
+  }
+
+  const btnImportIcs = qs('btnImportIcs');
+  const icsFileInput = qs('icsFileInput');
+  if(btnImportIcs && icsFileInput){
+    btnImportIcs.addEventListener('click', ()=>{
+      icsFileInput.value='';
+      icsFileInput.click();
+    });
+    icsFileInput.addEventListener('change', async ()=>{
+      const file = icsFileInput.files && icsFileInput.files[0];
+      if(!file) return;
+      try{
+        const text = await readFileAsText(file);
+        if(!icsMode){
+          setIcsMode(true);
+          if(icsToggle){
+            icsToggle.checked = true;
+          }
+        }
+        await parseIcsText(text);
+      } catch(err){
+        showMessage('读取 ICS 文件失败：'+ (err?.message || err),'error');
+      } finally {
+        icsFileInput.value='';
+      }
+    });
+  } else if(btnImportIcs){
+    btnImportIcs.style.display='none';
   }
 
   try {
