@@ -43,6 +43,7 @@ async function init(){
   els.parserList = qs('parserList');
   els.parsersEmpty = qs('parsersEmpty');
   els.addParser = qs('addParser');
+  els.defaultParserSelect = qs('defaultParserSelect');
   // removed per-section authorize
   els.parserModal = qs('parserModal');
   els.parserForm = qs('parserForm');
@@ -78,83 +79,23 @@ async function init(){
   els.serverList = qs('serverList');
   els.serversEmpty = qs('serversEmpty');
   els.addServer = qs('addServer');
-  // removed per-section authorize
   els.defaultServerSelect = qs('defaultServerSelect');
   els.serverModal = qs('serverModal');
   els.serverForm = qs('serverForm');
   els.serverModalTitle = qs('serverModalTitle');
   els.server_name = qs('server_name');
   els.server_type = qs('server_type');
-  // server typed fields
   els.s_default_calendar_name = qs('s_default_calendar_name');
   els.s_radicale_base = qs('s_radicale_base');
   els.s_radicale_username = qs('s_radicale_username');
   els.s_radicale_auth = qs('s_radicale_auth');
-  // google fields (no user inputs; only authorize/status)
   els.btnGoogleAuthorize = qs('btnGoogleAuthorize');
   els.googleRedirectHint = qs('google_redirect_hint');
   els.googleAuthStatus = qs('googleAuthStatus');
   els.closeServerModal = qs('closeServerModal');
   els._editingServerId = null;
+  els._serversCache = null;
   els._pendingGoogleConfig = null;
-  // modal fields
-  els.taskModal = qs('taskModal');
-  els.closeTaskModal = qs('closeTaskModal');
-  els.taskForm = qs('taskForm');
-  els.taskModalTitle = qs('taskModalTitle');
-  els.task_name = qs('task_name');
-  els.task_interval = qs('task_interval');
-  els.task_useInterval = qs('task_useInterval');
-  els.task_calendarName = qs('task_calendarName');
-  els.task_enabled = qs('task_enabled');
-  els.task_url = qs('task_url');
-  els.task_mode = qs('task_mode');
-  els.task_warmupUrl = qs('task_warmupUrl');
-  els.task_warmupSilent = qs('task_warmupSilent');
-  els.task_warmupWaitMs = qs('task_warmupWaitMs');
-  els.task_jsonPaths = qs('task_jsonPaths');
-  els.task_jsonPaths_wrap = qs('task_jsonPaths_wrap');
-  els.task_parserId = qs('task_parserId');
-  els.task_serverId = qs('task_serverId');
-  // new multi-trigger elements
-  els.task_useTimes = qs('task_useTimes');
-  els.schedule_times_wrap = qs('schedule_times_wrap');
-  els.task_times_list = qs('task_times_list');
-  els.task_time_input = qs('task_time_input');
-  els.task_time_add = qs('task_time_add');
-  els.task_visitTrigger = qs('task_visitTrigger');
-  els.visit_patterns_wrap = qs('visit_patterns_wrap');
-  els.task_visitPatterns = qs('task_visitPatterns');
-  els.taskRunOnce = qs('taskRunOnce');
-  els._editingTaskId = null;
-  // logs panel elements
-  els.logsContainer = qs('logs-container');
-  els.refreshLogs = qs('btn-refresh-logs');
-  els.clearLogs = qs('btn-clear-logs');
-  els.logLimit = qs('log-limit');
-  // permissions banner
-  els.permBanner = qs('permBanner');
-  els.btnAuthorizeMissing = qs('btnAuthorizeMissing');
-  els.btnAuthorizeAll = qs('btnAuthorizeAll');
-
-  const cfg = await loadSettings();
-  // cache loaded settings (contains DEFAULTS + config/dev.json overrides + saved settings)
-  els._settings = cfg;
-  if(els.pageParseEnabled) els.pageParseEnabled.value = cfg.pageParseEnabled ? 'true':'false';
-  // lastSync removed from UI
-  if(els.pageParseStrategy) els.pageParseStrategy.value = cfg.pageParseStrategy || 'fetch';
-  if(els.pageParseJsonPaths) els.pageParseJsonPaths.value = cfg.pageParseJsonPaths || DEFAULTS.pageParseJsonPaths;
-  if(els.pageParseJsonModeRadios){
-    const mode = cfg.pageParseJsonMode || DEFAULTS.pageParseJsonMode || 'llm';
-    els.pageParseJsonModeRadios.forEach(r => r.checked = (r.value === mode));
-  }
-  updateJsonPanelVisibility();
-  fillProvider();
-
-  els.saveBtn?.addEventListener('click', saveAll);
-  // syncNow removed (each task can run individually)
-  els.pageParseRun?.addEventListener('click', ()=> alert('旧版单任务即将移除，请使用上方多任务')); // deprecate
-  els.pageParseStrategy?.addEventListener('change', updateJsonPanelVisibility);
   els.pageParseJsonModeRadios?.forEach(r => r.addEventListener('change', ()=>{}));
   // multi task events
   els.addPageTask?.addEventListener('click', ()=> openTaskModal());
@@ -169,6 +110,7 @@ async function init(){
   els.server_type?.addEventListener('change', onServerTypeChange);
   els.btnGoogleAuthorize?.addEventListener('click', onClickGoogleAuthorize);
   els.defaultServerSelect?.addEventListener('change', saveDefaultServerSelection);
+  els.defaultParserSelect?.addEventListener('change', saveDefaultParserSelection);
   els.closeTaskModal?.addEventListener('click', closeTaskModal);
   els.taskForm?.addEventListener('submit', submitTaskForm);
   els.task_mode?.addEventListener('change', updateTaskModalVisibility);
@@ -520,12 +462,28 @@ async function saveParsers(parsers){
 async function loadRenderParsers(){
   try {
     const parsers = await loadParsers();
-    renderParsers(parsers);
-    populateParserSelect(parsers);
+    els._parsersCache = parsers;
+    const settings = await loadSettings();
+    if(settings) els._settings = { ...els._settings, ...settings };
+    let defaultParserId = settings?.selectedParserId;
+    if(parsers.length){
+      const exists = parsers.some(p=> p.id === defaultParserId);
+      if(!exists){
+        defaultParserId = parsers[0].id;
+        try {
+          await saveSettings({ selectedParserId: defaultParserId });
+          if(els._settings) els._settings.selectedParserId = defaultParserId;
+        } catch(saveErr){ console.warn('保存默认解析节点失败', saveErr); }
+      }
+    } else {
+      defaultParserId = undefined;
+    }
+    renderParsers(parsers, defaultParserId);
+    populateParserSelect(parsers, defaultParserId);
   } catch(e){ console.error('加载解析器失败', e); }
 }
 
-function renderParsers(parsers){
+function renderParsers(parsers, defaultParserId){
   if(!els.parserList) return;
   els.parserList.innerHTML='';
   const empty = els.parsersEmpty;
@@ -533,9 +491,11 @@ function renderParsers(parsers){
   for(const p of parsers){
     const li = document.createElement('li');
     li.style.cssText = 'border:1px solid #d4dbe6;padding:8px 10px;border-radius:10px;background:#fff;display:flex;flex-direction:column;gap:6px';
+    const isDefault = defaultParserId && p.id === defaultParserId;
+    const badge = isDefault ? '<span class="badge" style="margin-left:8px">默认</span>' : '';
     li.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:600">
-        <span>${escapeHtml(p.name||'未命名')}</span>
+        <span>${escapeHtml(p.name||'未命名')}${badge}</span>
         <span style="font-size:11px;color:#555">${escapeHtml(p.type||'')}</span>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -546,21 +506,39 @@ function renderParsers(parsers){
     li.querySelector('[data-act=del]').addEventListener('click', async ()=>{
       const list = parsers.filter(x=> x.id !== p.id);
       await saveParsers(list);
-      renderParsers(list);
-      populateParserSelect(list);
+      els._parsersCache = list;
+      await loadRenderParsers();
     });
     els.parserList.appendChild(li);
   }
 }
 
-function populateParserSelect(parsers){
-  if(!els.task_parserId) return;
-  const sel = els.task_parserId;
-  sel.innerHTML = '<option value="">(不使用解析节点)</option>';
-  for(const p of parsers){
-    const opt = document.createElement('option');
-    opt.value = p.id; opt.textContent = `${p.name} (${p.type})`;
-    sel.appendChild(opt);
+function populateParserSelect(parsers, defaultParserId){
+  if(els.task_parserId){
+    const sel = els.task_parserId;
+    sel.innerHTML = '<option value="">(不使用解析节点)</option>';
+    for(const p of parsers){
+      const isDefault = defaultParserId && p.id === defaultParserId;
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = `${p.name} (${p.type}${isDefault?' · 默认':''})`;
+      sel.appendChild(opt);
+    }
+  }
+  if(els.defaultParserSelect){
+    if(!parsers.length){
+      els.defaultParserSelect.innerHTML = '<option value="" disabled>暂无解析节点</option>';
+      els.defaultParserSelect.value = '';
+      els.defaultParserSelect.disabled = true;
+    } else {
+      els.defaultParserSelect.disabled = false;
+      els.defaultParserSelect.innerHTML = parsers.map(p=>{
+        const label = `${escapeHtml(p.name)} (${escapeHtml(p.type)})${defaultParserId && p.id === defaultParserId ? ' (默认)' : ''}`;
+        return `<option value="${p.id}">${label}</option>`;
+      }).join('');
+      const targetId = defaultParserId && parsers.some(p=>p.id===defaultParserId) ? defaultParserId : parsers[0].id;
+      els.defaultParserSelect.value = targetId;
+    }
   }
 }
 
@@ -651,8 +629,8 @@ async function submitParserForm(ev){
     const saved = await saveParsers(newList);
     const current = saved.find(x=> x.id === data.id);
     if(current){ await requestParserPermissions(current, { silent: true }); }
-    renderParsers(saved);
-    populateParserSelect(saved);
+    els._parsersCache = saved;
+    await loadRenderParsers();
     closeParserModal();
   } catch(e){ alert('保存解析器失败: '+ e.message); }
 }
@@ -751,15 +729,27 @@ async function saveServers(servers){
 async function loadRenderServers(){
   try {
     const servers = await loadServers();
-    renderServers(servers);
-    populateServerSelects(servers);
-    // set default select from storage
-    const cfg = await loadSettings();
-    if(els.defaultServerSelect){ els.defaultServerSelect.value = cfg.selectedServerId || ''; }
+    els._serversCache = servers;
+    const settings = await loadSettings();
+    if(settings) els._settings = { ...els._settings, ...settings };
+    let defaultServerId = settings?.selectedServerId;
+    if(servers.length){
+      if(!defaultServerId || !servers.some(s=> s.id === defaultServerId)){
+        defaultServerId = servers[0].id;
+        try {
+          await saveSettings({ selectedServerId: defaultServerId });
+          if(els._settings) els._settings.selectedServerId = defaultServerId;
+        } catch(saveErr){ console.warn('保存默认服务器失败', saveErr); }
+      }
+    } else {
+      defaultServerId = undefined;
+    }
+    renderServers(servers, defaultServerId);
+    populateServerSelects(servers, defaultServerId);
   } catch(e){ console.error('加载服务器失败', e); }
 }
 
-function renderServers(servers){
+function renderServers(servers, defaultServerId){
   if(!els.serverList) return;
   els.serverList.innerHTML='';
   const empty = els.serversEmpty;
@@ -767,9 +757,11 @@ function renderServers(servers){
   for(const s of servers){
     const li = document.createElement('li');
     li.style.cssText = 'border:1px solid #d4dbe6;padding:8px 10px;border-radius:10px;background:#fff;display:flex;flex-direction:column;gap:6px';
+    const isDefault = defaultServerId && s.id === defaultServerId;
+    const badge = isDefault ? '<span class="badge" style="margin-left:8px">默认</span>' : '';
     li.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:600">
-        <span>${escapeHtml(s.name||'未命名')}</span>
+        <span>${escapeHtml(s.name||'未命名')}${badge}</span>
         <span style="font-size:11px;color:#555">${escapeHtml(s.type||'')}</span>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -780,17 +772,36 @@ function renderServers(servers){
     li.querySelector('[data-act=del]').addEventListener('click', async ()=>{
       const list = servers.filter(x=> x.id !== s.id);
       await saveServers(list);
-      renderServers(list);
-      populateServerSelects(list);
+      els._serversCache = list;
+      await loadRenderServers();
     });
     els.serverList.appendChild(li);
   }
 }
 
-function populateServerSelects(servers){
-  const opts = ['<option value="">(默认)</option>'].concat((servers||[]).map(s=> `<option value="${s.id}">${escapeHtml(s.name)} (${escapeHtml(s.type)})</option>`)).join('');
-  if(els.task_serverId) els.task_serverId.innerHTML = opts;
-  if(els.defaultServerSelect) els.defaultServerSelect.innerHTML = ['<option value="">(不设置)</option>'].concat((servers||[]).map(s=> `<option value="${s.id}">${escapeHtml(s.name)} (${escapeHtml(s.type)})</option>`)).join('');
+function populateServerSelects(servers, defaultServerId){
+  if(els.task_serverId){
+    const opts = ['<option value="">(默认)</option>'].concat((servers||[]).map(s=> {
+      const isDefault = defaultServerId && s.id === defaultServerId;
+      return `<option value="${s.id}">${escapeHtml(s.name)} (${escapeHtml(s.type)}${isDefault?' · 默认':''})</option>`;
+    })).join('');
+    els.task_serverId.innerHTML = opts;
+  }
+  if(els.defaultServerSelect){
+    if(!servers.length){
+      els.defaultServerSelect.innerHTML = '<option value="" disabled>暂无服务器</option>';
+      els.defaultServerSelect.value = '';
+      els.defaultServerSelect.disabled = true;
+    } else {
+      els.defaultServerSelect.disabled = false;
+      els.defaultServerSelect.innerHTML = servers.map(s=>{
+        const label = `${escapeHtml(s.name)} (${escapeHtml(s.type)})${defaultServerId && s.id === defaultServerId ? ' (默认)' : ''}`;
+        return `<option value="${s.id}">${label}</option>`;
+      }).join('');
+      const targetId = defaultServerId && servers.some(s=> s.id === defaultServerId) ? defaultServerId : servers[0].id;
+      els.defaultServerSelect.value = targetId;
+    }
+  }
 }
 
 function openServerModal(server, all){
@@ -858,15 +869,14 @@ async function submitServerForm(ev){
       const data = { id, name, type, config: cfg };
       newList = [...list, data];
     }
-  const saved = await saveServers(newList);
-  const current = saved.find(x=> x.id === id);
+    const saved = await saveServers(newList);
+    const current = saved.find(x=> x.id === id);
     if(current){ await requestServerPermissions(current, { silent: true }); }
     els._serversCache = saved;
     els._editingServerId = id;
-    renderServers(saved);
-    populateServerSelects(saved);
+    await loadRenderServers();
     updateGoogleAuthUI(current?.config || cfg);
-  els._pendingGoogleConfig = null;
+    els._pendingGoogleConfig = null;
     alert('服务器已保存');
   } catch(e){ alert('保存服务器失败: '+ e.message); }
 }
@@ -900,11 +910,9 @@ async function onClickGoogleAuthorize(){
         }
         throw new Error(msg);
       }
-      const refreshed = await loadServers();
-      els._serversCache = refreshed;
-      renderServers(refreshed);
-      populateServerSelects(refreshed);
-      const current = refreshed.find(x=> x.id === savedId);
+  await loadRenderServers();
+  const currentList = Array.isArray(els._serversCache) ? els._serversCache : await loadServers();
+  const current = currentList.find(x=> x.id === savedId);
       updateGoogleAuthUI(current?.config || {});
       alert('Google 授权完成');
     } catch(e){
@@ -939,8 +947,8 @@ async function onClickGoogleAuthorize(){
       }
       throw new Error(msg);
     }
-    const afterAuth = await loadServers();
-    const tempSaved = afterAuth.find(x=> x.id === tempId);
+  const afterAuth = await loadServers();
+  const tempSaved = afterAuth.find(x=> x.id === tempId);
     if(tempSaved){
       els._pendingGoogleConfig = {
         ...tempSaved.config,
@@ -949,17 +957,18 @@ async function onClickGoogleAuthorize(){
       };
     }
     // remove temp node from storage
-    const cleaned = afterAuth.filter(x=> x.id !== tempId);
-    await saveServers(cleaned);
-    els._serversCache = cleaned;
-    updateGoogleAuthUI(els._pendingGoogleConfig || {});
+  const cleaned = afterAuth.filter(x=> x.id !== tempId);
+  await saveServers(cleaned);
+  els._serversCache = cleaned;
+  await loadRenderServers();
+  updateGoogleAuthUI(els._pendingGoogleConfig || {});
     alert('Google 授权完成，请点击保存以固定服务器配置');
   } catch(e){
     try {
-      const cur = await loadServers();
-      const cleaned = cur.filter(x=> x.id !== tempId);
-      if(cleaned.length !== cur.length){ await saveServers(cleaned); }
-      els._serversCache = cleaned;
+  const cur = await loadServers();
+  const cleaned = cur.filter(x=> x.id !== tempId);
+  if(cleaned.length !== cur.length){ await saveServers(cleaned); }
+  els._serversCache = cleaned;
     } catch(_){ /* ignore */ }
     els._pendingGoogleConfig = null;
     updateGoogleAuthUI({});
@@ -971,7 +980,18 @@ async function saveDefaultServerSelection(){
   try{
     const id = (els.defaultServerSelect?.value || '').trim();
     await saveSettings({ selectedServerId: id || undefined });
+    if(els._settings) els._settings.selectedServerId = id || undefined;
+    await loadRenderServers();
   }catch(e){ console.error('保存默认服务器失败', e); }
+}
+
+async function saveDefaultParserSelection(){
+  try{
+    const id = (els.defaultParserSelect?.value || '').trim();
+    await saveSettings({ selectedParserId: id || undefined });
+    if(els._settings) els._settings.selectedParserId = id || undefined;
+    await loadRenderParsers();
+  }catch(e){ console.error('保存默认解析节点失败', e); }
 }
 
 // Compute missing optional host permissions and toggle banner
