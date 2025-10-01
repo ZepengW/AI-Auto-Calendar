@@ -1,6 +1,6 @@
 // Pluggable calendar server registry and unified upload
 // Types supported: 'radicale' (merge via ICS), 'google' (Google Calendar API)
-import { DEFAULTS, isoToICSTime, escapeICSText } from './shared.js';
+import { DEFAULTS, isoToICSTime, escapeICSText, loadSettings } from './shared.js';
 
 // ---------------- Storage ----------------
 export async function loadServers() {
@@ -207,27 +207,64 @@ function normalizeGoogle(ev){
 
 async function uploadToGoogleCalendar(events, calendarName, server){
   const cfg = server.config || {};
-  const clientId = cfg.clientId || DEFAULTS.googleClientId;
+  // Prefer merged settings (DEFAULTS + config/dev.json + saved) for Google settings
+  const settings = await loadSettings();
+  const nowSec = Math.floor(Date.now()/1000);
+  let accessToken = null;
+  if(cfg.token?.access_token && cfg.token.expires_at && cfg.token.expires_at - nowSec > 60){
+    accessToken = cfg.token.access_token;
+  }
+  const clientId = cfg.clientId || settings.googleClientId || DEFAULTS.googleClientId;
   const clientSecret = cfg.clientSecret; // optional
-  const fallbackCalendarId = (cfg.calendarId || DEFAULTS.googleCalendarId || 'primary');
+  const fallbackCalendarId = (cfg.calendarId || settings.googleCalendarId || DEFAULTS.googleCalendarId || 'primary');
   // Try Chrome Identity first (no client_secret required). Requires manifest.oauth2 configured.
   const manifest = (chrome?.runtime?.getManifest?.() || {});
   const hasManifestOauth = !!(manifest.oauth2 && manifest.oauth2.client_id);
-  let accessToken = null;
+  const usingIdentityMode = cfg.oauthMode === 'identity';
+  async function persistIdentityToken(token, lifetimeSec = 3600){
+    if(!token) return null;
+    const expires_at = Math.floor(Date.now()/1000) + lifetimeSec - 30;
+    const saved = await updateServerConfig(server.id, { token: { access_token: token, token_type:'Bearer', expires_at, source:'identity' }, oauthMode:'identity' });
+    cfg.token = saved?.config?.token || { access_token: token, token_type:'Bearer', expires_at, source:'identity' };
+    return cfg.token;
+  }
+  if(!accessToken && usingIdentityMode && chrome?.identity?.getAuthToken){
+    let tok = null;
+    try { tok = await getTokenViaChromeIdentity({ interactive: false }); }
+    catch(_){ tok = await getTokenViaChromeIdentity({ interactive: true }); }
+    if(!tok) throw new Error('未获得访问令牌');
+    const stored = await persistIdentityToken(tok);
+    accessToken = stored?.access_token || tok;
+  }
   if(hasManifestOauth && chrome?.identity?.getAuthToken){
-    // Try silent first to avoid prompting every time
-    try {
-      accessToken = await getTokenViaChromeIdentity({ interactive: false });
-    } catch(_){ /* fall back */ }
+    if(!accessToken){
+      // Try silent first to avoid prompting every time
+      try {
+        const tok = await getTokenViaChromeIdentity({ interactive: false });
+        if(tok){
+          const stored = await persistIdentityToken(tok);
+          accessToken = stored?.access_token || tok;
+        }
+      } catch(_){ /* fall back */ }
+    }
   }
   if(!accessToken){
     if(!clientId) throw new Error('Google 配置缺少 Client ID');
     const tokenInfo = await ensureGoogleAccessToken(server.id, { clientId, clientSecret, scopes: ['https://www.googleapis.com/auth/calendar'] });
     accessToken = tokenInfo?.access_token || tokenInfo?.accessToken;
+    if(tokenInfo?.source === 'identity' && tokenInfo?.access_token){
+      cfg.token = tokenInfo;
+    }
   }
   if(!accessToken && hasManifestOauth && chrome?.identity?.getAuthToken){
-    // Last resort: interactive identity prompt
-    try { accessToken = await getTokenViaChromeIdentity({ interactive: true }); } catch(_){ /* keep null */ }
+    // Last resort: interactive identity prompt (once). Avoid double prompt by not chaining multiple flows in one run
+    try {
+      const tok = await getTokenViaChromeIdentity({ interactive: true });
+      if(tok){
+        const stored = await persistIdentityToken(tok);
+        accessToken = stored?.access_token || tok;
+      }
+    } catch(_){ /* keep null */ }
   }
   if(!accessToken) throw new Error('未获得访问令牌');
 
@@ -298,10 +335,14 @@ async function uploadToGoogleCalendar(events, calendarName, server){
     throw new Error('获取 Google 日历事件失败: ' + (e?.message||e));
   }
   if(listRes.status === 401){
-    // Try identity refresh path first
+    // Try identity refresh path first (single retry only)
     if(hasManifestOauth && chrome?.identity?.getAuthToken){
       try {
-        accessToken = await refreshChromeIdentityToken(accessToken);
+        const refreshed = await refreshChromeIdentityToken(accessToken);
+        if(refreshed){
+          const stored = await persistIdentityToken(refreshed);
+          accessToken = stored?.access_token || refreshed;
+        }
         listRes = await fetch(listUrl, { headers: { 'Authorization': `Bearer ${accessToken}` } });
       } catch(e){ /* fallback below */ }
     }
@@ -350,10 +391,14 @@ async function uploadToGoogleCalendar(events, calendarName, server){
       throw new Error('创建事件失败: ' + (e?.message||e));
     }
     if(res.status === 401){
-      // identity refresh first
+      // identity refresh first (single retry only)
       if(hasManifestOauth && chrome?.identity?.getAuthToken){
         try {
-          accessToken = await refreshChromeIdentityToken(accessToken);
+          const refreshed = await refreshChromeIdentityToken(accessToken);
+          if(refreshed){
+            const stored = await persistIdentityToken(refreshed);
+            accessToken = stored?.access_token || refreshed;
+          }
           res = await fetch(url, { method:'POST', headers:{ 'Authorization': `Bearer ${accessToken}`, 'Content-Type':'application/json' }, body: JSON.stringify(body) });
         } catch(_){ /* fallback */ }
       }
@@ -400,7 +445,33 @@ async function ensureGoogleAccessToken(serverId, { clientId, clientSecret, scope
     const t = await refreshGoogleToken(serverId, { clientId, clientSecret });
     if(t?.access_token) return t;
   }
-  // need interactive auth using PKCE
+  if(cfg.oauthMode === 'identity'){
+    let tok;
+    try { tok = await getTokenViaChromeIdentity({ interactive: false }); }
+    catch(_){ tok = await getTokenViaChromeIdentity({ interactive: true }); }
+    if(!tok) throw new Error('未获得授权令牌');
+    const expires_at = Math.floor(Date.now()/1000) + 3300;
+    const saved = await updateServerConfig(serverId, { token: { access_token: tok, token_type:'Bearer', expires_at, source:'identity' }, oauthMode: 'identity' });
+    return saved?.config?.token || { access_token: tok, token_type:'Bearer', expires_at, source:'identity' };
+  }
+  let mode = cfg.oauthMode;
+  if(!mode){
+    if(cfg.token?.refresh_token){
+      mode = 'pkce';
+    } else if(clientSecret){
+      mode = 'pkce';
+    } else {
+      mode = 'implicit';
+    }
+  }
+  if(mode === 'implicit'){
+    const implicit = await getAccessTokenViaImplicit({ clientId, scopes: (scopes||[]) });
+    if(!implicit?.access_token) throw new Error('未获得授权令牌');
+    const expires_at = Math.floor(Date.now()/1000) + (Number(implicit.expires_in)||3600) - 30;
+    const saved2 = await updateServerConfig(serverId, { token: { access_token: implicit.access_token, token_type: 'Bearer', expires_in: implicit.expires_in, expires_at }, oauthMode: 'implicit' });
+    return saved2?.config?.token || { access_token: implicit.access_token, token_type: 'Bearer', expires_in: implicit.expires_in, expires_at };
+  }
+  // need interactive auth using PKCE (installed-app friendly). May fail if client_id belongs to Web app requiring client_secret.
   const codeVerifier = base64url(crypto.getRandomValues(new Uint8Array(32)));
   const state = base64url(crypto.getRandomValues(new Uint8Array(16)));
   const codeChallenge = await sha256(codeVerifier);
@@ -449,18 +520,14 @@ async function ensureGoogleAccessToken(serverId, { clientId, clientSecret, scope
     try { const t = await tokenRes.text(); detail = t?.slice(0,300) || ''; } catch(_){ }
     // If server insists on client_secret (confidential client), try implicit flow (no refresh_token)
     if(tokenRes.status === 400 && /client[_-]?secret|secret key|missing\s+secret/i.test(detail || '')){
-      const implicit = await getAccessTokenViaImplicit({ clientId, scopes: (scopes||[]) });
-      if(implicit?.access_token){
-        const expires_at = Math.floor(Date.now()/1000) + (Number(implicit.expires_in)||3600) - 30;
-        const saved2 = await updateServerConfig(serverId, { token: { access_token: implicit.access_token, token_type: 'Bearer', expires_in: implicit.expires_in, expires_at } });
-        return saved2?.config?.token || { access_token: implicit.access_token, token_type: 'Bearer', expires_in: implicit.expires_in, expires_at };
-      }
+      await updateServerConfig(serverId, { oauthMode: 'implicit' });
+      throw new Error('当前 Client ID 需要 Client Secret，已切换为隐式授权模式，请重新点击一次“授权”。');
     }
     throw new Error('令牌交换失败: '+ tokenRes.status + (detail? (' '+detail):''));
   }
   const tokenJson = await tokenRes.json();
   const expires_at = Math.floor(Date.now()/1000) + (Number(tokenJson.expires_in)||3600) - 30;
-  const saved = await updateServerConfig(serverId, { token: { ...tokenJson, expires_at } });
+  const saved = await updateServerConfig(serverId, { token: { ...tokenJson, expires_at }, oauthMode: 'pkce' });
   return saved?.config?.token || { ...tokenJson, expires_at };
 }
 
@@ -494,13 +561,24 @@ export async function authorizeServer(serverId){
   const manifest = (chrome?.runtime?.getManifest?.() || {});
   const hasManifestOauth = !!(manifest.oauth2 && manifest.oauth2.client_id);
   if(hasManifestOauth && chrome?.identity?.getAuthToken){
-    await getTokenViaChromeIdentity({ interactive: true });
+    let token;
+    try { token = await getTokenViaChromeIdentity({ interactive: false }); }
+    catch(_){ token = await getTokenViaChromeIdentity({ interactive: true }); }
+    if(!token) throw new Error('未获得浏览器身份令牌');
+    const expires_at = Math.floor(Date.now()/1000) + 3300;
+    await updateServerConfig(serverId, { token: { access_token: token, token_type: 'Bearer', expires_at, source:'identity' }, oauthMode: 'identity' });
     return { ok:true };
   }
   // Use packaged/default clientId when not provided in server config
-  const clientId = cfg.clientId || DEFAULTS.googleClientId;
+  const settings = await loadSettings();
+  const clientId = cfg.clientId || settings.googleClientId || DEFAULTS.googleClientId;
   const clientSecret = cfg.clientSecret; // optional
   if(!clientId) throw new Error('缺少 Google Client ID：请在 config/dev.json 或 DEFAULTS 中配置');
+  // Avoid re-prompt: if we already have a valid (not expired) token, return early
+  const now = Math.floor(Date.now()/1000);
+  if(cfg.token && cfg.token.access_token && cfg.token.expires_at && cfg.token.expires_at - now > 60){
+    return { ok:true };
+  }
   await ensureGoogleAccessToken(serverId, { clientId, clientSecret, scopes:['https://www.googleapis.com/auth/calendar'] });
   return { ok:true };
 }

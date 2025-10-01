@@ -270,9 +270,9 @@ function bind(){
   const bpd = qs('btnParseDownload'); if(bpd) bpd.addEventListener('click', parseAndDownload);
   qs('btnClear').addEventListener('click', ()=>{ qs('rawInput').value=''; setStatus(''); });
   qs('btnMock').addEventListener('click', ()=>{
-    qs('rawInput').value = `明天下午3点-5点在软件学院220会议室开AI项目评审会
-9月18日全天 外聘专家对接
-每周三 9:00-10:00 组会（连续四周）`;
+    qs('rawInput').value = `明天下午3点-5点在软件学院220会议室开AI项目评审会；
+9月18日全天 外聘专家对接；
+本周三开始，每个周三的下午4点到5点开组会，共四周。`;
   });
   qs('btnUpload').addEventListener('click', uploadSelected);
   const bds = qs('btnDownloadSelected'); if(bds) bds.addEventListener('click', downloadSelected);

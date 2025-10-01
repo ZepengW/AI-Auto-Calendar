@@ -96,6 +96,7 @@ async function init(){
   els.googleAuthStatus = qs('googleAuthStatus');
   els.closeServerModal = qs('closeServerModal');
   els._editingServerId = null;
+  els._pendingGoogleConfig = null;
   // modal fields
   els.taskModal = qs('taskModal');
   els.closeTaskModal = qs('closeTaskModal');
@@ -676,6 +677,65 @@ function showParserPanel(kind){
 }
 
 // ---------------- Servers management ----------------
+function computeGoogleTokenStatus(cfg){
+  const token = cfg?.token;
+  if(token?.access_token){
+    const now = Math.floor(Date.now()/1000);
+    if(token.expires_at && token.expires_at <= now){
+      return '授权已过期，请重新授权';
+    }
+    if(token.source === 'identity') return '已授权(浏览器身份)';
+    return '已授权';
+  }
+  return '未授权';
+}
+
+function updateGoogleAuthUI(cfg){
+  const isGoogle = (els.server_type?.value || 'radicale') === 'google';
+  const saved = !!els._editingServerId;
+  let effectiveCfg = cfg;
+  if(!effectiveCfg){
+    if(saved && Array.isArray(els._serversCache)){
+      const found = els._serversCache.find(x=> x.id === els._editingServerId);
+      effectiveCfg = found?.config || {};
+    } else if(!saved && els._pendingGoogleConfig){
+      effectiveCfg = els._pendingGoogleConfig;
+    } else {
+      effectiveCfg = {};
+    }
+  }
+  if(els.btnGoogleAuthorize){
+    if(isGoogle){
+      els.btnGoogleAuthorize.disabled = false;
+      els.btnGoogleAuthorize.title = saved ? '' : (els._pendingGoogleConfig ? '已完成授权，可保存' : '未保存节点：可先授权获取令牌，再保存');
+      els.btnGoogleAuthorize.style.display = '';
+    }else{
+      els.btnGoogleAuthorize.disabled = true;
+      els.btnGoogleAuthorize.title = '';
+      els.btnGoogleAuthorize.style.display = 'none';
+    }
+  }
+  if(!els.googleAuthStatus){
+    return;
+  }
+  if(!isGoogle){
+    els.googleAuthStatus.textContent = '';
+    return;
+  }
+  const status = computeGoogleTokenStatus(effectiveCfg);
+  els.googleAuthStatus.textContent = status;
+  if(status === '未授权'){
+    try {
+      const manifest = chrome.runtime.getManifest?.() || {};
+      if(manifest.oauth2 && chrome.identity?.getAuthToken){
+        chrome.identity.getAuthToken({ interactive: false }, (tok)=>{
+          if(tok){ els.googleAuthStatus.textContent = '已授权(浏览器身份)'; }
+        });
+      }
+    } catch(_){ /* ignore identity probe errors */ }
+  }
+}
+
 async function loadServers(){
   const r = await chrome.runtime.sendMessage({ type:'GET_SERVERS' });
   if(!r?.ok) throw new Error(r.error||'获取服务器失败');
@@ -734,6 +794,11 @@ function populateServerSelects(servers){
 }
 
 function openServerModal(server, all){
+  if(server){
+    els._pendingGoogleConfig = null;
+  } else if(!els._pendingGoogleConfig){
+    els._pendingGoogleConfig = null;
+  }
   els._editingServerId = server?.id || null;
   els.serverModalTitle.textContent = server? '编辑服务器节点':'新增服务器节点';
   els.server_name.value = server?.name || '';
@@ -745,26 +810,18 @@ function openServerModal(server, all){
   els.s_radicale_auth.value = c.auth || '';
   // No Google input fields; values come from dev config/DEFAULTS in runtime code
   if(els.googleRedirectHint){ els.googleRedirectHint.textContent = `https://${chrome.runtime.id}.chromiumapp.org/`; }
-  if(els.googleAuthStatus){
-    // Prefer showing Identity status if available
-    try{
-      const manifest = chrome.runtime.getManifest?.() || {};
-      if(manifest.oauth2 && chrome.identity?.getAuthToken){
-        chrome.identity.getAuthToken({ interactive: false }, (tok)=>{
-          if(tok) els.googleAuthStatus.textContent = '已授权(浏览器身份)';
-          else els.googleAuthStatus.textContent = c.token?.access_token ? '已授权' : '未授权';
-        });
-      } else {
-        els.googleAuthStatus.textContent = c.token?.access_token ? '已授权' : '未授权';
-      }
-    } catch{ els.googleAuthStatus.textContent = c.token?.access_token ? '已授权' : '未授权'; }
-  }
+  updateGoogleAuthUI(c);
   els._serversCache = all || null;
   onServerTypeChange();
   els.serverModal.style.display='flex';
 }
 
-function closeServerModal(){ els.serverModal.style.display='none'; els._editingServerId=null; }
+function closeServerModal(){
+  els.serverModal.style.display='none';
+  els._editingServerId=null;
+  els._pendingGoogleConfig = null;
+  updateGoogleAuthUI({});
+}
 
 async function submitServerForm(ev){
   ev.preventDefault();
@@ -774,7 +831,7 @@ async function submitServerForm(ev){
     cfg = { base: (els.s_radicale_base.value||'').trim(), username:(els.s_radicale_username.value||'').trim(), auth:(els.s_radicale_auth.value||'').trim() };
   } else if(type === 'google'){
     // No user-entered Google fields; rely on packaged config/DEFAULTS at runtime
-    cfg = {};
+    cfg = { ...(els._pendingGoogleConfig || {}) };
   }
   // common: default calendar name
   const defCal = (els.s_default_calendar_name?.value||'').trim();
@@ -804,9 +861,13 @@ async function submitServerForm(ev){
   const saved = await saveServers(newList);
   const current = saved.find(x=> x.id === id);
     if(current){ await requestServerPermissions(current, { silent: true }); }
+    els._serversCache = saved;
+    els._editingServerId = id;
     renderServers(saved);
     populateServerSelects(saved);
-    closeServerModal();
+    updateGoogleAuthUI(current?.config || cfg);
+  els._pendingGoogleConfig = null;
+    alert('服务器已保存');
   } catch(e){ alert('保存服务器失败: '+ e.message); }
 }
 
@@ -816,16 +877,94 @@ function onServerTypeChange(){
   const b = document.getElementById('server_panel_google');
   if(a) a.style.display = t==='radicale' ? 'flex':'none';
   if(b) b.style.display = t==='google' ? 'flex':'none';
+  let cfg = {};
+  if(els._editingServerId && Array.isArray(els._serversCache)){
+    const found = els._serversCache.find(x=> x.id === els._editingServerId);
+    if(found) cfg = found.config || {};
+  }
+  updateGoogleAuthUI(cfg);
 }
 
 async function onClickGoogleAuthorize(){
-  if(!els._editingServerId){ alert('请先保存服务器后再授权'); return; }
+  const type = (els.server_type?.value||'radicale');
+  if(type !== 'google') return;
+  const savedId = els._editingServerId;
+  if(savedId){
+    try {
+      if(els.googleAuthStatus) els.googleAuthStatus.textContent = '授权中…';
+      const r = await chrome.runtime.sendMessage({ type:'AUTHORIZE_SERVER', id: savedId });
+      if(!r?.ok){
+        const msg = r.error||'授权失败';
+        if(/client id|clientid|缺少\s*google\s*client\s*id/i.test(msg)){
+          throw new Error(msg + '\n请在扩展包内 config/dev.json 中设置 googleClientId，或在源码 DEFAULTS 中配置。');
+        }
+        throw new Error(msg);
+      }
+      const refreshed = await loadServers();
+      els._serversCache = refreshed;
+      renderServers(refreshed);
+      populateServerSelects(refreshed);
+      const current = refreshed.find(x=> x.id === savedId);
+      updateGoogleAuthUI(current?.config || {});
+      alert('Google 授权完成');
+    } catch(e){
+      if(Array.isArray(els._serversCache)){
+        const current = els._serversCache.find(x=> x.id === savedId);
+        updateGoogleAuthUI(current?.config || {});
+      } else {
+        updateGoogleAuthUI({});
+      }
+      alert('授权失败: ' + e.message);
+    }
+    return;
+  }
+  // Unsaved Google server: create temporary entry to reuse backend authorize flow
+  let baseList = els._serversCache;
+  try{
+    if(!Array.isArray(baseList)) baseList = await loadServers();
+  }catch(_){ baseList = []; }
+  const cfg = els._pendingGoogleConfig ? { ...els._pendingGoogleConfig } : {};
+  const defCal = (els.s_default_calendar_name?.value||'').trim();
+  if(defCal) cfg.defaultCalendarName = defCal;
+  const tempId = 'temp-google-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6);
+  const tempServer = { id: tempId, name: '(临时授权)', type:'google', config: cfg };
   try {
-    const r = await chrome.runtime.sendMessage({ type:'AUTHORIZE_SERVER', id: els._editingServerId });
-    if(!r?.ok) throw new Error(r.error||'授权失败');
-    if(els.googleAuthStatus) els.googleAuthStatus.textContent = '已授权';
-    alert('Google 授权完成');
-  } catch(e){ alert('授权失败: ' + e.message); }
+    await saveServers([...(baseList||[]), tempServer]);
+    if(els.googleAuthStatus) els.googleAuthStatus.textContent = '授权中…';
+    const r = await chrome.runtime.sendMessage({ type:'AUTHORIZE_SERVER', id: tempId });
+    if(!r?.ok){
+      const msg = r.error||'授权失败';
+      if(/client id|clientid|缺少\s*google\s*client\s*id/i.test(msg)){
+        throw new Error(msg + '\n请在扩展包内 config/dev.json 中设置 googleClientId，或在源码 DEFAULTS 中配置。');
+      }
+      throw new Error(msg);
+    }
+    const afterAuth = await loadServers();
+    const tempSaved = afterAuth.find(x=> x.id === tempId);
+    if(tempSaved){
+      els._pendingGoogleConfig = {
+        ...tempSaved.config,
+        token: tempSaved.config?.token,
+        oauthMode: tempSaved.config?.oauthMode,
+      };
+    }
+    // remove temp node from storage
+    const cleaned = afterAuth.filter(x=> x.id !== tempId);
+    await saveServers(cleaned);
+    els._serversCache = cleaned;
+    updateGoogleAuthUI(els._pendingGoogleConfig || {});
+    alert('Google 授权完成，请点击保存以固定服务器配置');
+  } catch(e){
+    try {
+      const cur = await loadServers();
+      const cleaned = cur.filter(x=> x.id !== tempId);
+      if(cleaned.length !== cur.length){ await saveServers(cleaned); }
+      els._serversCache = cleaned;
+    } catch(_){ /* ignore */ }
+    els._pendingGoogleConfig = null;
+    updateGoogleAuthUI({});
+    alert('授权失败: ' + e.message);
+  }
 }
 
 async function saveDefaultServerSelection(){
