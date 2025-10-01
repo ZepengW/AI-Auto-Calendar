@@ -1,6 +1,6 @@
 // Pluggable calendar server registry and unified upload
 // Types supported: 'radicale' (merge via ICS), 'google' (Google Calendar API)
-import { DEFAULTS, isoToICSTime, escapeICSText, loadSettings } from './shared.js';
+import { DEFAULTS, isoToICSTime, escapeICSText, loadSettings, expandRecurringEvents } from './shared.js';
 
 // ---------------- Storage ----------------
 export async function loadServers() {
@@ -44,12 +44,12 @@ async function updateServerConfig(id, patch){
 }
 
 // ---------------- Upload Router ----------------
-export async function mergeUploadWithServer(events, calendarName, server){
+export async function mergeUploadWithServer(events, calendarName, server, meta = {}){
   if(!server) throw new Error('服务器未配置');
   if(server.type === 'radicale'){
-    return await mergeUploadWithRadicale(events, calendarName, server);
+    return await mergeUploadWithRadicale(events, calendarName, server, meta);
   } else if(server.type === 'google'){
-    return await uploadToGoogleCalendar(events, calendarName, server);
+    return await uploadToGoogleCalendar(events, calendarName, server, meta);
   }
   throw new Error('不支持的服务器类型: ' + server.type);
 }
@@ -70,9 +70,22 @@ function parseExistingICS(text){
   let cur = null;
   for(const raw of lines){
     const line = raw.trim();
-    if(line === 'BEGIN:VEVENT'){ cur = { rawProps:{} }; continue; }
-    if(line === 'END:VEVENT'){ if(cur){ events.push(cur); cur=null; } continue; }
+    if(line === 'BEGIN:VEVENT'){
+      cur = { rawProps:{}, rawLines:[raw] };
+      continue;
+    }
+    if(line === 'END:VEVENT'){
+      if(cur){
+        cur.rawLines.push(raw);
+        cur.rawICS = cur.rawLines.join('\n');
+        delete cur.rawLines;
+        events.push(cur);
+      }
+      cur=null;
+      continue;
+    }
     if(cur){
+      cur.rawLines.push(raw);
       const idx = line.indexOf(':');
       if(idx>0){
         const keyPart = line.slice(0, idx);
@@ -85,6 +98,7 @@ function parseExistingICS(text){
         if(key === 'DTEND') cur.endTime = parseICSTime(value.replace(/Z$/, ''));
         if(key === 'LOCATION') cur.location = value;
         if(key === 'DESCRIPTION') cur.description = value;
+        if(key === 'RRULE') cur.rrule = value;
       }
     }
   }
@@ -114,6 +128,21 @@ function mergeEvents(existing, incoming){
   return [...map.values()];
 }
 
+function toIcsDateString(raw, dateObj){
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (/^\d{8}$/.test(trimmed)) return trimmed;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed.replace(/-/g, '');
+  }
+  if (dateObj instanceof Date && !isNaN(dateObj)) {
+    const y = dateObj.getFullYear();
+    const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const d = String(dateObj.getDate()).padStart(2, '0');
+    return `${y}${m}${d}`;
+  }
+  return '';
+}
+
 function buildICS(events, calendarName = 'Calendar'){
   const now = new Date();
   const lines = [
@@ -126,18 +155,42 @@ function buildICS(events, calendarName = 'Calendar'){
   for(const ev of events){
     try{
       if(!ev.startTime || !ev.endTime || !ev.title) continue;
+      const raw = typeof ev.rawICS === 'string' ? ev.rawICS.trim() : '';
+      if (raw && raw.toUpperCase().includes('BEGIN:VEVENT')) {
+        const blockLines = raw.replace(/\r?\n/g, '\r\n').split(/\r?\n/);
+        lines.push(...blockLines);
+        continue;
+      }
       lines.push('BEGIN:VEVENT');
-      const uid = ev.eventId || ev.id || 'evt-' + Math.random().toString(36).slice(2);
+      const uid = ev.uid || ev.eventId || ev.id || 'evt-' + Math.random().toString(36).slice(2);
       lines.push(`UID:${uid}`);
       lines.push(`DTSTAMP:${isoToICSTime(now)}`);
-      const s = ev.startTime instanceof Date ? ev.startTime : null;
-      const e = ev.endTime instanceof Date ? ev.endTime : null;
-      if(!s || !e) continue;
-      lines.push(`DTSTART:${isoToICSTime(s)}`);
-      lines.push(`DTEND:${isoToICSTime(e)}`);
+      const sDate = ev.startTime instanceof Date ? ev.startTime : null;
+      const eDate = ev.endTime instanceof Date ? ev.endTime : null;
+      if(!sDate || !eDate) { lines.push('END:VEVENT'); continue; }
+      const startIsDate = !!(ev.startTimeIsDate || ev.startIsDate || ev.allDay);
+      const endIsDate = !!(ev.endTimeIsDate || ev.endIsDate || ev.allDay);
+      if (startIsDate) {
+        const dateStr = toIcsDateString(ev.startDateText, sDate);
+        if (dateStr) lines.push(`DTSTART;VALUE=DATE:${dateStr}`);
+      } else {
+        lines.push(`DTSTART:${isoToICSTime(sDate)}`);
+      }
+      if (endIsDate) {
+        const dateStr = toIcsDateString(ev.endDateText, eDate);
+        if (dateStr) lines.push(`DTEND;VALUE=DATE:${dateStr}`);
+      } else {
+        lines.push(`DTEND:${isoToICSTime(eDate)}`);
+      }
       lines.push(`SUMMARY:${escapeICSText(ev.title || ev.summary || '')}`);
       if (ev.location) lines.push(`LOCATION:${escapeICSText(ev.location)}`);
       if (ev.status) lines.push(`STATUS:${escapeICSText(ev.status)}`);
+      if (ev.rrule) {
+        const clause = String(ev.rrule).trim();
+        if (clause) {
+          lines.push(clause.toUpperCase().startsWith('RRULE:') ? clause : `RRULE:${clause}`);
+        }
+      }
       if (ev.description) lines.push(`DESCRIPTION:${escapeICSText(String(ev.description))}`);
       lines.push('END:VEVENT');
     }catch(e){ /* ignore one event */ }
@@ -150,7 +203,7 @@ function buildOriginFromUrl(raw){
   try { const u = new URL(raw); return `${u.protocol}//${u.hostname}${u.port?':'+u.port:''}/*`; } catch(_){ return null; }
 }
 
-async function mergeUploadWithRadicale(events, calendarName, server){
+async function mergeUploadWithRadicale(events, calendarName, server, meta = {}){
   const cfg = server.config || {};
   const base = String(cfg.base || DEFAULTS.radicalBase || '').replace(/\/$/, '');
   const user = cfg.username || DEFAULTS.radicalUsername;
@@ -173,7 +226,11 @@ async function mergeUploadWithRadicale(events, calendarName, server){
   let existingText = '';
   try { const res = await fetch(url, { method:'GET', headers }); if(res.ok) existingText = await res.text(); } catch(_){ }
   const existingParsed = parseExistingICS(existingText);
-  const merged = mergeEvents(existingParsed, events);
+  const expandedIncoming = expandRecurringEvents(events, {
+    horizonDays: meta?.recurrenceHorizonDays || 365,
+    maxOccurrences: meta?.maxRecurrenceInstances || 400,
+  });
+  const merged = mergeEvents(existingParsed, expandedIncoming);
   const ics = buildICS(merged, calendarName);
   const putHeaders = { 'Content-Type': 'text/calendar; charset=utf-8', ...headers };
   const put = await fetch(url, { method:'PUT', headers: putHeaders, body: ics });
@@ -183,6 +240,161 @@ async function mergeUploadWithRadicale(events, calendarName, server){
 
 // ---------------- Google Calendar Support ----------------
 function toRfc3339(dt){ return (dt instanceof Date ? dt : new Date(dt)).toISOString(); }
+
+function toDateOnlyString(raw, dateObj){
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (/^\d{8}$/.test(trimmed)) {
+      return `${trimmed.slice(0,4)}-${trimmed.slice(4,6)}-${trimmed.slice(6,8)}`;
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      return trimmed;
+    }
+  }
+  if (dateObj instanceof Date && !isNaN(dateObj)) {
+    const y = dateObj.getFullYear();
+    const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const d = String(dateObj.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return '';
+}
+
+function formatDateTimeForZone(date, timeZone) {
+  try {
+    const dtf = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    const parts = dtf.formatToParts(date);
+    const comp = {};
+    for (const part of parts) {
+      if (part.type === 'literal') continue;
+      comp[part.type] = part.value;
+    }
+    if (!comp.year || !comp.month || !comp.day) throw new Error('format failure');
+    const hour = comp.hour || '00';
+    const minute = comp.minute || '00';
+    const second = comp.second || '00';
+    const base = `${comp.year}-${comp.month}-${comp.day}T${hour}:${minute}:${second}`;
+    const utcMillis = Date.parse(`${base}Z`);
+    if (!Number.isFinite(utcMillis)) throw new Error('invalid base');
+    const offsetMinutes = Math.round((utcMillis - date.getTime()) / 60000);
+    const sign = offsetMinutes >= 0 ? '+' : '-';
+    const abs = Math.abs(offsetMinutes);
+    const hh = String(Math.floor(abs / 60)).padStart(2, '0');
+    const mm = String(abs % 60).padStart(2, '0');
+    return { dateTime: `${base}${sign}${hh}:${mm}`, offsetMinutes };
+  } catch (_err) {
+    return { dateTime: toRfc3339(date), offsetMinutes: null };
+  }
+}
+
+function normalizeRecurrenceEntry(entry) {
+  const str = String(entry || '').trim();
+  if (!str) return '';
+  const idx = str.indexOf(':');
+  if (idx === -1) {
+    return `RRULE:${str.toUpperCase()}`;
+  }
+  const prefix = str.slice(0, idx).toUpperCase();
+  const rest = str.slice(idx + 1).trim();
+  if (prefix === 'RRULE') {
+    return `RRULE:${rest.toUpperCase()}`;
+  }
+  return `${prefix}:${rest}`;
+}
+
+function buildGoogleRecurrence(ev) {
+  const fromArray = (arr) => {
+    const out = arr.map((item) => normalizeRecurrenceEntry(item)).filter(Boolean);
+    return out.length ? out : undefined;
+  };
+  if (Array.isArray(ev?.recurrence) && ev.recurrence.length) {
+    return fromArray(ev.recurrence);
+  }
+  if (ev?.rrule) {
+    const single = normalizeRecurrenceEntry(ev.rrule);
+    return single ? [single] : undefined;
+  }
+  return undefined;
+}
+
+function prepareGoogleDate(ev, kind) {
+  const isStart = kind === 'start';
+  const dateObj = isStart ? ev.startTime : ev.endTime;
+  const raw = isStart ? ev.startTimeRaw : ev.endTimeRaw;
+  const isDateOnly = isStart
+    ? !!(ev.startTimeIsDate ?? ev.startIsDate ?? ev.allDay)
+    : !!(ev.endTimeIsDate ?? ev.endIsDate ?? ev.allDay);
+  const dateText = isStart
+    ? (ev.startDateText || toDateOnlyString(raw, dateObj))
+    : (ev.endDateText || toDateOnlyString(raw, dateObj));
+  const tz = isStart
+    ? (ev.startTimeZone || ev.timeZone || null)
+    : (ev.endTimeZone || ev.timeZone || null);
+  if (isDateOnly) {
+    const dateVal = dateText || toDateOnlyString(null, dateObj);
+    if (!dateVal) return { payload: null, signature: '' };
+    return { payload: { date: dateVal }, signature: `date:${dateVal}` };
+  }
+  if (!(dateObj instanceof Date) || isNaN(dateObj)) {
+    return { payload: null, signature: '' };
+  }
+  if (tz) {
+    const formatted = formatDateTimeForZone(dateObj, tz);
+    return { payload: { dateTime: formatted.dateTime, timeZone: tz }, signature: `${formatted.dateTime}|tz:${tz}` };
+  }
+  const iso = toRfc3339(dateObj);
+  return { payload: { dateTime: iso, timeZone: 'UTC' }, signature: `${iso}|tz:UTC` };
+}
+
+function prepareGoogleEvent(ev) {
+  if (!ev || !ev.title) return null;
+  const startPrep = prepareGoogleDate(ev, 'start');
+  const endPrep = prepareGoogleDate(ev, 'end');
+  if (!startPrep.payload || !endPrep.payload) return null;
+  const recurrence = buildGoogleRecurrence(ev);
+  const recurrenceKey = recurrence ? recurrence.join(';') : '';
+  const title = (ev.title || ev.summary || '').trim().toLowerCase();
+  const location = (ev.location || '').trim().toLowerCase();
+  const startSig = (startPrep.signature || '').toLowerCase();
+  const endSig = (endPrep.signature || '').toLowerCase();
+  const signature = `${title}|${startSig}|${endSig}|${location}|${recurrenceKey.toLowerCase()}`;
+  return { signature, startPrep, endPrep, recurrence, event: ev };
+}
+
+function buildExistingGoogleSignature(item) {
+  if (!item) return '';
+  const title = (item.summary || '').trim().toLowerCase();
+  const location = (item.location || '').trim().toLowerCase();
+  let startSig = '';
+  if (item.start?.date) {
+    startSig = `date:${item.start.date}`;
+  } else {
+    const dt = (item.start?.dateTime || '').trim().toLowerCase();
+    const tz = (item.start?.timeZone || '').trim().toLowerCase();
+    startSig = `${dt}|tz:${tz}`;
+  }
+  let endSig = '';
+  if (item.end?.date) {
+    endSig = `date:${item.end.date}`;
+  } else {
+    const dt = (item.end?.dateTime || '').trim().toLowerCase();
+    const tz = (item.end?.timeZone || '').trim().toLowerCase();
+    endSig = `${dt}|tz:${tz}`;
+  }
+  const recurrenceKey = Array.isArray(item.recurrence) && item.recurrence.length
+    ? item.recurrence.map((entry) => normalizeRecurrenceEntry(entry)).filter(Boolean).join(';').toLowerCase()
+    : '';
+  return `${title}|${startSig.toLowerCase()}|${endSig.toLowerCase()}|${location}|${recurrenceKey}`;
+}
 
 function getMinMaxDates(arr){
   let min = null, max = null;
@@ -199,13 +411,7 @@ function getMinMaxDates(arr){
   return { min: pad1, max: pad2 };
 }
 
-function normalizeGoogle(ev){
-  const s = ev.startTime instanceof Date ? ev.startTime.toISOString() : (ev.startTime?.toISOString?.() || (ev.startTime ? new Date(ev.startTime).toISOString() : ''));
-  const e = ev.endTime instanceof Date ? ev.endTime.toISOString() : (ev.endTime?.toISOString?.() || (ev.endTime ? new Date(ev.endTime).toISOString() : ''));
-  return `${(ev.title||'').trim()}|${s}|${e}|${(ev.location||'').trim()}`.toLowerCase();
-}
-
-async function uploadToGoogleCalendar(events, calendarName, server){
+async function uploadToGoogleCalendar(events, calendarName, server, meta = {}){
   const cfg = server.config || {};
   // Prefer merged settings (DEFAULTS + config/dev.json + saved) for Google settings
   const settings = await loadSettings();
@@ -360,29 +566,33 @@ async function uploadToGoogleCalendar(events, calendarName, server){
   listJson = await listRes.json();
   const existing = Array.isArray(listJson.items) ? listJson.items : [];
   const existingMap = new Map();
-  for(const it of existing){
-    const start = it.start?.dateTime || (it.start?.date ? it.start.date + 'T00:00:00Z' : null);
-    const end = it.end?.dateTime || (it.end?.date ? it.end.date + 'T00:00:00Z' : null);
-    const sig = normalizeGoogle({ title: it.summary || '', startTime: start, endTime: end, location: it.location || '' });
-    existingMap.set(sig, it);
+  for (const it of existing) {
+    const sig = buildExistingGoogleSignature(it);
+    if (sig) existingMap.set(sig, it);
   }
   // Compute insertions
   const toInsert = [];
-  for(const ev of events){
-    if(!ev.title || !ev.startTime || !ev.endTime) continue;
-    const sig = normalizeGoogle(ev);
-    if(existingMap.has(sig)) continue; // skip duplicates
-    toInsert.push(ev);
+  for (const ev of events) {
+    const prepared = prepareGoogleEvent(ev);
+    if (!prepared) continue;
+    if (existingMap.has(prepared.signature)) continue;
+    toInsert.push(prepared);
   }
   let inserted = 0;
-  for(const ev of toInsert){
+  for (const prepared of toInsert) {
+    const ev = prepared.event;
     const body = {
       summary: ev.title,
       location: ev.location || undefined,
       description: ev.description ? String(ev.description) : undefined,
-      start: { dateTime: toRfc3339(ev.startTime) },
-      end: { dateTime: toRfc3339(ev.endTime) },
+      start: prepared.startPrep.payload,
+      end: prepared.endPrep.payload,
     };
+    if (prepared.recurrence && prepared.recurrence.length) {
+      body.recurrence = prepared.recurrence;
+    }
+    if (ev.uid) body.iCalUID = String(ev.uid);
+    else if (ev.id) body.iCalUID = String(ev.id);
     const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
     let res;
     try {

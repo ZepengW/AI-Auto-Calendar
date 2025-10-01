@@ -347,13 +347,16 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                         <div class="note">阿里百炼 App：调用 <code>https://dashscope.aliyuncs.com/api/v1/apps/{app_id}/completion</code>，仅需 API Key 与 App ID（可用默认）。请通过“授权”允许 <code>dashscope.aliyuncs.com</code>。</div>
                     </div>
                     <div id="parser_panel_jsonmap" style="display:none;flex-direction:column;gap:10px">
+                        <div style="font-size:12px;color:#475569;line-height:1.6">
+                            将 JSON 列表字段映射到标准 iCalendar 属性，解析节点会据此直接生成可上传的 ICS 文件。
+                        </div>
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-                            <label>标题字段(逗号分隔)<input id="p_json_map_title" type="text" placeholder="title,summary,name" /></label>
-                            <label>地点字段(逗号分隔)<input id="p_json_map_location" type="text" placeholder="location,place" /></label>
-                            <label>开始时间字段(逗号分隔)<input id="p_json_map_startTime" type="text" placeholder="startTime,begin,start" /></label>
-                            <label>结束时间字段(逗号分隔)<input id="p_json_map_endTime" type="text" placeholder="endTime,finish,end" /></label>
-                            <label>UID 字段(逗号分隔)<input id="p_json_map_uid" type="text" placeholder="uid,id,eventId" /></label>
-                            <label>描述字段(逗号分隔)<input id="p_json_map_description" type="text" placeholder="description,desc,detail" /></label>
+                            <label>SUMMARY (事件标题) 对应字段<input id="p_json_map_title" type="text" placeholder="title,summary,name" /></label>
+                            <label>LOCATION 对应字段<input id="p_json_map_location" type="text" placeholder="location,place" /></label>
+                            <label>DTSTART (开始时间) 对应字段<input id="p_json_map_startTime" type="text" placeholder="startTime,begin,start" /></label>
+                            <label>DTEND (结束时间) 对应字段<input id="p_json_map_endTime" type="text" placeholder="endTime,finish,end" /></label>
+                            <label>UID 对应字段<input id="p_json_map_uid" type="text" placeholder="uid,id,eventId" /></label>
+                            <label>DESCRIPTION 对应字段<input id="p_json_map_description" type="text" placeholder="description,desc,detail" /></label>
                         </div>
                         <fieldset style="border:1px solid #e1e8f0;padding:12px;border-radius:10px;background:#f8fafc">
                             <legend style="padding:0 6px;font-size:12px;color:#0f172a">默认值(当字段缺失时使用)</legend>
@@ -367,7 +370,7 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                             </div>
                             <div class="note">UID 默认值填 <code>auto</code> 时将自动生成；留空则当字段缺失时跳过。</div>
                         </fieldset>
-                        <div style="font-size:12px;color:#64748b">时间字段支持多种格式，内部会尝试解析。</div>
+                        <div style="font-size:12px;color:#64748b">时间字段支持多种格式，节点会自动转为符合 iCalendar 的 DTSTART/DTEND。</div>
                     </div>
                     <div style="display:flex;gap:10px;justify-content:flex-end"><button type="submit" class="primary">保存</button></div>
                 </form>

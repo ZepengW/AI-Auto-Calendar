@@ -7,6 +7,7 @@ import {
   escapeICSText,
   DEFAULTS,
   parseLLMTime,
+  ensureCalendarPayload,
 } from './shared.js';
 import { loadParsers, saveParsers, getParserById, parseWithParser } from './parsers.js';
 import { loadServers, saveServers, getServerById, mergeUploadWithServer, authorizeServer } from './servers.js';
@@ -385,13 +386,14 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg?.type === 'PARSE_LLM_ONLY') {
     parseLLMOnly(msg.text)
-      .then((events) => sendResponse({ ok: true, events }))
+      .then((payload) => sendResponse({ ok: true, payload }))
       .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true;
   }
   if (msg?.type === 'UPLOAD_EVENTS') {
-    uploadEventsList(msg.events, msg.serverId, msg.calendarName)
-      .then((count) => sendResponse({ ok: true, count }))
+    const payload = msg.payload || { events: msg.events, icsText: msg.icsText };
+    uploadCalendarPayload(payload, msg.serverId, msg.calendarName)
+      .then((result) => sendResponse({ ok: true, ...result }))
       .catch((err) => sendResponse({ ok: false, error: err.message }));
     return true;
   }
@@ -447,8 +449,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     (async () => {
       const parser = await getParserById(msg.parserId);
       if (!parser) throw new Error('解析器未找到');
-      const events = await parseWithParser(String(msg.text||''), parser, { jsonPaths: msg.jsonPaths });
-      sendResponse({ ok: true, events });
+      const payload = await parseWithParser(String(msg.text||''), parser, { jsonPaths: msg.jsonPaths, calendarName: msg.calendarName });
+      sendResponse({ ok: true, payload });
     })().catch((e) => sendResponse({ ok: false, error: e.message }));
     return true;
   }
@@ -587,54 +589,24 @@ async function getDefaultParser() {
 async function parseLLMAndUpload(rawText, serverId) {
   const parser = await getDefaultParser();
   if (!parser) throw new Error('未配置解析节点，请先在设置中添加解析节点');
-  const events = await parseWithParser(String(rawText||''), parser, {});
-  // 不强制默认名称，留空以便使用服务器节点的 defaultCalendarName 配置
-  const { total } = await uploadWithSelectedServer(events, undefined, serverId);
-  return { count: events.length, total };
+  const payload = await parseWithParser(String(rawText||''), parser, {});
+  const result = await uploadCalendarPayload(payload, serverId, payload.calendarName);
+  return { count: result.count, total: result.total, calendarName: result.calendarName };
 }
 
 async function parseLLMOnly(rawText) {
   const parser = await getDefaultParser();
   if (!parser) throw new Error('未配置解析节点，请先在设置中添加解析节点');
-  const events = await parseWithParser(String(rawText||''), parser, {});
-  // keep raw fields for UI edit page compatibility
-  return events.map(ev => ({
-    ...ev,
-    startTimeRaw: ev.startTimeRaw || ev.startTime,
-    endTimeRaw: ev.endTimeRaw || ev.endTime,
-  }));
+  const payload = await parseWithParser(String(rawText||''), parser, {});
+  return payload;
 }
 
-async function uploadEventsList(events, serverId, calendarName) {
-  if (!Array.isArray(events) || !events.length) throw new Error('事件为空');
-  const settings = await loadSettings();
-  const toDate = (v)=>{
-    if(v instanceof Date) return v;
-    // try SJTU style then LLM style then ISO
-    const s1 = parseSJTUTime(v); if(s1 instanceof Date) return s1;
-    const s2 = parseLLMTime(v); if(s2 instanceof Date) return s2;
-    const s = (v==null? '' : String(v)).trim();
-    if(!s) return null;
-    const d = new Date(s);
-    return isNaN(d?.getTime?.()) ? null : d;
-  };
-  const norm = events.map((ev) => {
-    const s = toDate(ev.startTime) || toDate(ev.startTimeRaw);
-    const e = toDate(ev.endTime) || toDate(ev.endTimeRaw);
-    return { ...ev, startTime: s, endTime: e };
-  });
-  const valid = [];
-  const dropped = [];
-  for (const ev of norm) {
-    if (!ev.title || !ev.startTime || !ev.endTime) dropped.push(ev); else valid.push(ev);
-  }
-  if (!valid.length) throw new Error('全部事件缺少字段或时间格式无法解析');
-  // 这里不设置本地默认名称，传递原始 calendarName；
-  // uploadWithSelectedServer 内部会优先使用显式名称，否则使用服务器的 defaultCalendarName，再回退到 'PAGE-PARSED'
-  const { total } = await uploadWithSelectedServer(valid, calendarName, serverId);
-  if (dropped.length) notifyAll(`合并上传 ${valid.length} 条，丢弃 ${dropped.length} 条；当前日历共 ${total} 条`);
-  else notifyAll(`合并上传 ${valid.length} 条；当前日历共 ${total} 条`);
-  return valid.length;
+async function uploadCalendarPayload(payloadInput, serverId, calendarName) {
+  const normalized = ensureCalendarPayload(payloadInput, { calendarName });
+  if (!normalized.events.length) throw new Error('没有可上传的事件');
+  const targetName = normalized.calendarName || calendarName;
+  const { total } = await uploadWithSelectedServer(normalized.events, targetName, serverId, { icsText: normalized.icsText });
+  return { count: normalized.events.length, total, calendarName: targetName, icsText: normalized.icsText };
 }
 
 // -----------------------------
@@ -872,7 +844,7 @@ async function warmupVisit(warmUrl, opts){
   });
 }
 
-async function uploadWithSelectedServer(events, calendarName, serverId){
+async function uploadWithSelectedServer(events, calendarName, serverId, meta = {}){
   const settings = await loadSettings();
   // preference: task.serverId -> global selectedServerId -> fallback legacy radical
   const prefId = serverId || settings.selectedServerId;
@@ -882,7 +854,7 @@ async function uploadWithSelectedServer(events, calendarName, serverId){
     if (server){
       // Prefer explicit calendarName; if absent, use server defaultCalendarName; fallback to PAGE-PARSED
       const targetName = (calendarName && calendarName.trim()) || server.config?.defaultCalendarName || 'PAGE-PARSED';
-      const r = await mergeUploadWithServer(events, targetName, server);
+      const r = await mergeUploadWithServer(events, targetName, server, meta);
       return { total: r.total };
     }
   }

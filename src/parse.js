@@ -1,4 +1,4 @@
-import { loadSettings, DEFAULTS, parseLLMTime, isoToICSTime, escapeICSText } from './shared.js';
+import { loadSettings, DEFAULTS, parseLLMTime, ensureCalendarPayload } from './shared.js';
 
 function qs(id){ return document.getElementById(id); }
 function ce(tag, props={}){ const el=document.createElement(tag); Object.assign(el, props); return el; }
@@ -7,8 +7,44 @@ function setStatus(txt){ const s=qs('parseStatus'); if(s) s.textContent = txt ||
 function setUploadStatus(html, cls){ const box=qs('uploadStatus'); if(!box) return; box.innerHTML = html || ''; box.className = cls||''; }
 function showMessage(html, type='info'){ const box=qs('messageBox'); if(!box) return; box.style.display='block'; box.innerHTML = `<div class="${type==='error'?'error-box':'success-box'}">${html}</div>`; setTimeout(()=>{box.style.display='none';}, 8000); }
 
+let currentPayload = { events: [], icsText: '', calendarName: '' };
 let currentEvents = [];
 let jsonMode = false; // 当为 true 时，rawInput 直接被当作 JSON 解析
+
+function applyPayload(payload, fallbackName){
+  const options = {};
+  if(fallbackName) options.calendarName = fallbackName;
+  const prevRaw = currentPayload?.rawIcsText;
+  currentPayload = ensureCalendarPayload(payload || {}, options);
+  if(!currentPayload.rawIcsText && (payload?.rawIcsText || prevRaw)){
+    currentPayload.rawIcsText = payload?.rawIcsText || prevRaw;
+  }
+  if(!currentPayload.calendarName && options.calendarName) currentPayload.calendarName = options.calendarName;
+  currentEvents = currentPayload.events;
+}
+
+function markPayloadDirty(){
+  if(currentPayload) currentPayload.icsText = '';
+}
+
+function buildEventIcsSnippet(event){
+  if(!event) return '';
+  const rawIcs = event.rawICS || event.raw?.rawICS;
+  if(rawIcs) return rawIcs;
+  const payloadRaw = currentPayload?.rawIcsText;
+  if(payloadRaw && event.title){
+    const escaped = event.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regex = new RegExp(`BEGIN:VEVENT[\\s\\S]*?SUMMARY:${escaped}[\\s\\S]*?END:VEVENT`, 'i');
+    const matchRaw = payloadRaw.match(regex);
+    if(matchRaw) return matchRaw[0];
+  }
+  const name = currentPayload?.calendarName || 'LLM-Parsed';
+  const payload = ensureCalendarPayload({ events: [event] }, { calendarName: name });
+  const text = payload?.icsText || '';
+  if(!text) return '';
+  const match = text.match(/BEGIN:VEVENT[\s\S]*?END:VEVENT/);
+  return match ? match[0] : text;
+}
 
 function setJsonMode(on){
   jsonMode = !!on;
@@ -46,7 +82,7 @@ async function parseJson(raw){
   let obj;
   try { obj = JSON.parse(text); } catch(e){ showMessage('JSON 解析失败：'+ e.message,'error'); return; }
   const events = normalizeJsonEvents(obj);
-  currentEvents = events;
+  applyPayload({ events, calendarName: 'JSON-Manual' }, 'JSON-Manual');
   renderEvents();
   showMessage('JSON 解析成功，共 '+currentEvents.length+' 条','success');
 }
@@ -61,16 +97,14 @@ async function parseLLM(raw){
       await parseJson(text);
     } else {
       const parserId = (qs('parserSelect')?.value || '').trim();
-      let res;
+      let resp;
       if(parserId){
-        const r = await chrome.runtime.sendMessage({ type:'PARSE_TEXT_WITH_PARSER', parserId, text });
-        if(!r?.ok) throw new Error(r?.error||'解析失败');
-        res = { ok:true, events: r.events };
+        resp = await chrome.runtime.sendMessage({ type:'PARSE_TEXT_WITH_PARSER', parserId, text });
       } else {
-        res = await chrome.runtime.sendMessage({ type:'PARSE_LLM_ONLY', text });
+        resp = await chrome.runtime.sendMessage({ type:'PARSE_LLM_ONLY', text });
       }
-      if(!res?.ok) throw new Error(res?.error || '解析失败');
-      currentEvents = res.events || [];
+      if(!resp?.ok) throw new Error(resp?.error || '解析失败');
+      applyPayload(resp.payload, resp.payload?.calendarName);
       renderEvents();
       showMessage('解析成功，共 '+currentEvents.length+' 条','success');
     }
@@ -110,7 +144,7 @@ function renderEvents(){
       <td><input type="datetime-local" class="ed-end" data-idx="${idx}" value="${escapeHtml(toLocalInput(ev.endTime||ev.endTimeRaw))}" style="width:180px"></td>
       <td><input class="ed-loc" data-idx="${idx}" value="${escapeHtml(ev.location||'')}" style="width:140px"></td>
       <td><input class="ed-desc" data-idx="${idx}" value="${escapeHtml(ev.description||'')}" style="width:200px"></td>
-  <td><button class="btn-view-json btn-mini" data-idx="${idx}">查看</button></td>`;
+  <td><button class="btn-view-json btn-mini" data-idx="${idx}">查看 ICS</button></td>`;
     tbody.appendChild(tr);
   });
   updateUploadButton();
@@ -137,18 +171,22 @@ function attachTableEvents(){
       document.querySelectorAll('.rowChk').forEach(c=>{ c.checked = t.checked; });
       updateUploadButton();
     }
-    if(t.classList.contains('ed-title')) currentEvents[t.dataset.idx].title = t.value.trim();
-    if(t.classList.contains('ed-loc')) currentEvents[t.dataset.idx].location = t.value.trim();
-    if(t.classList.contains('ed-desc')) currentEvents[t.dataset.idx].description = t.value;
+    let dirty = false;
+    if(t.classList.contains('ed-title')){ currentEvents[t.dataset.idx].title = t.value.trim(); dirty = true; }
+    if(t.classList.contains('ed-loc')){ currentEvents[t.dataset.idx].location = t.value.trim(); dirty = true; }
+    if(t.classList.contains('ed-desc')){ currentEvents[t.dataset.idx].description = t.value; dirty = true; }
     if(t.classList.contains('ed-start')){
       // datetime-local -> local time; store as Date to避免格式问题
       const s = String(t.value||'').trim();
       currentEvents[t.dataset.idx].startTime = s ? new Date(s) : null;
+      dirty = true;
     }
     if(t.classList.contains('ed-end')){
       const s = String(t.value||'').trim();
       currentEvents[t.dataset.idx].endTime = s ? new Date(s) : null;
+      dirty = true;
     }
+    if(dirty) markPayloadDirty();
   });
   // raw json modal buttons (event delegation for row button)
   document.addEventListener('click', (e)=>{
@@ -157,7 +195,11 @@ function attachTableEvents(){
       const i = Number(t.dataset.idx);
       const data = currentEvents[i] || {};
       const modal = qs('rawModal'); const pre = qs('rawContent');
-      if(modal && pre){ pre.textContent = JSON.stringify(data, null, 2); modal.style.display='flex'; }
+      if(modal && pre){
+        const snippet = buildEventIcsSnippet(data);
+        pre.textContent = snippet || '（无可用 ICS 内容）';
+        modal.style.display='flex';
+      }
     }
     if(t.id === 'rawClose'){
       const modal = qs('rawModal'); if(modal) modal.style.display='none';
@@ -191,47 +233,15 @@ async function uploadSelected(){
       return { ...ev, startTime: s || ev.startTime || ev.startTimeRaw, endTime: e || ev.endTime || ev.endTimeRaw };
     });
     const serverId = (qs('serverSelect')?.value || '').trim();
-    const calendarName = (qs('calendarNameInput')?.value || '').trim() || undefined;
-    const res = await chrome.runtime.sendMessage({ type:'UPLOAD_EVENTS', events: normalized, serverId: serverId || undefined, calendarName });
+    const inputCalendarName = (qs('calendarNameInput')?.value || '').trim() || undefined;
+    const payload = ensureCalendarPayload({ events: normalized }, { calendarName: inputCalendarName || currentPayload.calendarName || 'LLM-Parsed' });
+    const res = await chrome.runtime.sendMessage({ type:'UPLOAD_EVENTS', payload, serverId: serverId || undefined, calendarName: payload.calendarName });
     if(!res?.ok) throw new Error(res?.error || '上传失败');
-    setUploadStatus('上传成功：'+ normalized.length +' 条','success-box');
+    applyPayload(payload, payload.calendarName);
+    setUploadStatus('上传成功：'+ payload.events.length +' 条','success-box');
   } catch(e){
     setUploadStatus('上传失败：'+ e.message,'error-box');
   }
-}
-
-// ---- Download helpers (ICS) ----
-function buildICS(events, calendarName='LLM-Parsed'){
-  const now = new Date();
-  const lines = [
-    'BEGIN:VCALENDAR',
-    'VERSION:2.0',
-    'PRODID:-//SJTU-Auto-Calendar//EN',
-    `X-WR-CALNAME:${escapeICSText(calendarName)}`,
-    'X-WR-TIMEZONE:UTC',
-  ];
-  for(const ev of events){
-    try{
-      const s = parseLLMTime(ev.startTime) || parseLLMTime(ev.startTimeRaw) || ev.startTime || ev.startTimeRaw;
-      const e = parseLLMTime(ev.endTime) || parseLLMTime(ev.endTimeRaw) || ev.endTime || ev.endTimeRaw;
-      if(!s || !e || !ev.title) continue;
-      const sd = s instanceof Date ? s : new Date(s);
-      const ed = e instanceof Date ? e : new Date(e);
-      if(!(sd instanceof Date) || isNaN(sd) || !(ed instanceof Date) || isNaN(ed)) continue;
-      lines.push('BEGIN:VEVENT');
-      const uid = ev.eventId || ev.id || 'evt-' + Math.random().toString(36).slice(2);
-      lines.push(`UID:${uid}`);
-      lines.push(`DTSTAMP:${isoToICSTime(now)}`);
-      lines.push(`DTSTART:${isoToICSTime(sd)}`);
-      lines.push(`DTEND:${isoToICSTime(ed)}`);
-      lines.push(`SUMMARY:${escapeICSText(ev.title)}`);
-      if(ev.location) lines.push(`LOCATION:${escapeICSText(ev.location)}`);
-      if(ev.description) lines.push(`DESCRIPTION:${escapeICSText(String(ev.description))}`);
-      lines.push('END:VEVENT');
-    }catch(_){ /* ignore bad row */ }
-  }
-  lines.push('END:VCALENDAR');
-  return lines.join('\r\n');
 }
 
 function downloadText(filename, text){
@@ -251,8 +261,8 @@ async function parseAndDownload(){
     const idxs = collectSelected();
     const picked = idxs.length ? idxs.map(i=> currentEvents[i]) : currentEvents.slice();
     if(!picked.length){ showMessage('没有可下载的事件','error'); return; }
-    const ics = buildICS(picked, 'LLM-Parsed');
-    downloadText('LLM-Parsed.ics', ics);
+    const payload = ensureCalendarPayload({ events: picked }, { calendarName: currentPayload.calendarName || 'LLM-Parsed' });
+    downloadText(`${payload.calendarName||'LLM-Parsed'}.ics`, payload.icsText);
     showMessage('已生成并下载 ICS','success');
   }catch(e){ showMessage('解析或下载失败: ' + e.message, 'error'); }
 }
@@ -261,8 +271,8 @@ function downloadSelected(){
   const idxs = collectSelected();
   if(!idxs.length){ setUploadStatus('未选择事件','error-box'); return; }
   const picked = idxs.map(i=> currentEvents[i]);
-  const ics = buildICS(picked, 'LLM-Parsed');
-  downloadText('LLM-Parsed-selected.ics', ics);
+  const payload = ensureCalendarPayload({ events: picked }, { calendarName: currentPayload.calendarName || 'LLM-Parsed' });
+  downloadText(`${payload.calendarName||'LLM-Parsed'}-selected.ics`, payload.icsText);
 }
 
 function bind(){

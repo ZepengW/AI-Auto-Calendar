@@ -4,7 +4,7 @@
 // - 'chatgpt_agent': 内置提示的 ChatGPT Agent 抽取（model+apiKey）
 // - 'bailian_agent': 阿里百炼 Agent API (agentId + apiKey)
 // - 'json_mapping': Map fields from JSON list using simple path selection
-import { loadSettings, DEFAULTS, parseLLMTime, parseSJTUTime } from './shared.js';
+import { loadSettings, DEFAULTS, ensureCalendarPayload, parseLLMTime, parseSJTUTime } from './shared.js';
 
 // Small helper to include a clipped snippet in error messages without flooding the UI
 function buildSnippet(label, text, maxLen = 500) {
@@ -15,6 +15,94 @@ function buildSnippet(label, text, maxLen = 500) {
   } catch {
     return '';
   }
+}
+
+function buildTimezoneString() {
+  try {
+    const tzName = Intl?.DateTimeFormat?.().resolvedOptions?.().timeZone;
+    const now = new Date();
+    const offsetMinutes = -now.getTimezoneOffset();
+    const sign = offsetMinutes >= 0 ? '+' : '-';
+    const abs = Math.abs(offsetMinutes);
+    const hours = String(Math.floor(abs / 60)).padStart(2, '0');
+    const minutes = String(abs % 60).padStart(2, '0');
+    const offset = `${sign}${hours}:${minutes}`;
+    if (tzName) return `${tzName} (UTC${offset})`;
+    return `UTC${offset}`;
+  } catch {
+    return 'UTC';
+  }
+}
+
+function extractICSBlock(content) {
+  if (!content) return null;
+  let text = String(content).trim();
+  text = text
+    .replace(/^```[a-zA-Z0-9_-]*\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+  const upper = text.toUpperCase();
+  const beginIdx = upper.indexOf('BEGIN:VCALENDAR');
+  const endIdx = upper.lastIndexOf('END:VCALENDAR');
+  if (beginIdx === -1 || endIdx === -1 || endIdx < beginIdx) return null;
+  return text.slice(beginIdx, endIdx + 'END:VCALENDAR'.length).trim();
+}
+
+function ensureCalendarFromContent(content, opts, snippetLabel = '输出片段') {
+  const ics = extractICSBlock(content);
+  if (ics) {
+    const payload = ensureCalendarPayload({ icsText: ics, rawIcsText: ics }, opts);
+    if (opts?.calendarName) payload.calendarName = opts.calendarName;
+    if (!payload.events.length) {
+      throw new Error('ICS 内容中未解析到事件。' + buildSnippet(snippetLabel, content));
+    }
+    return payload;
+  }
+  let plain = String(content || '').trim();
+  plain = plain
+    .replace(/^```[a-zA-Z0-9_-]*\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+  const plainUpper = plain.toUpperCase();
+  if (plainUpper.includes('BEGIN:VEVENT')) {
+    const body = plain;
+    const calendarName = opts?.calendarName || 'LLM-Parsed';
+    const wrapped = [
+      'BEGIN:VCALENDAR',
+      'VERSION:2.0',
+      'PRODID:-//SJTU-Auto-Calendar//EN',
+      `X-WR-CALNAME:${calendarName}`,
+      'X-WR-TIMEZONE:UTC',
+      body,
+      'END:VCALENDAR',
+    ].join('\n');
+    const payload = ensureCalendarPayload({ icsText: wrapped, rawIcsText: body }, opts);
+    if (opts?.calendarName) payload.calendarName = opts.calendarName;
+    if (!payload.events.length) {
+      throw new Error('ICS 片段中未解析到事件。' + buildSnippet(snippetLabel, content));
+    }
+    return payload;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(plain || '{}');
+  } catch {
+    throw new Error('解析 LLM 输出失败，非合法 JSON 或 ICS。' + buildSnippet(snippetLabel, content));
+  }
+  let events = [];
+  if (Array.isArray(parsed)) {
+    events = parsed;
+  } else if (parsed && Array.isArray(parsed.events)) {
+    events = parsed.events;
+  } else {
+    throw new Error('解析结果缺少 events 数组。' + buildSnippet(snippetLabel, content));
+  }
+  const payload = ensureCalendarPayload({ events }, opts);
+  if (opts?.calendarName) payload.calendarName = opts.calendarName;
+  if (!payload.events.length) {
+    throw new Error('解析结果中没有有效事件。' + buildSnippet(snippetLabel, content));
+  }
+  return payload;
 }
 
 // ---------------- Storage ----------------
@@ -54,11 +142,16 @@ export async function getParserById(id) {
 // --------------- Unified Parse -----------------
 export async function parseWithParser(rawText, parser, options = {}) {
   if (!parser || !parser.type) throw new Error('解析器无效');
-  if (parser.type === 'zhipu_agent') return parseViaZhipuAgent(rawText, parser.config || {}, options);
-  if (parser.type === 'chatgpt_agent') return parseViaChatGPTAgent(rawText, parser.config || {}, options);
-  if (parser.type === 'bailian_agent') return parseViaBailianAgent(rawText, parser.config || {}, options);
-  if (parser.type === 'json_mapping') return parseViaJsonMapping(rawText, parser.config || {}, options);
-  throw new Error('未知解析器类型 ' + parser.type);
+  let payload;
+  if (parser.type === 'zhipu_agent') payload = await parseViaZhipuAgent(rawText, parser.config || {}, options);
+  else if (parser.type === 'chatgpt_agent') payload = await parseViaChatGPTAgent(rawText, parser.config || {}, options);
+  else if (parser.type === 'bailian_agent') payload = await parseViaBailianAgent(rawText, parser.config || {}, options);
+  else if (parser.type === 'json_mapping') payload = await parseViaJsonMapping(rawText, parser.config || {}, options);
+  else throw new Error('未知解析器类型 ' + parser.type);
+  const calendarName = options.calendarName || parser.config?.calendarName;
+  const normalized = ensureCalendarPayload(payload, { calendarName });
+  if (calendarName && !normalized.calendarName) normalized.calendarName = calendarName;
+  return normalized;
 }
 
 // --------------- Zhipu Agent ---------------
@@ -81,7 +174,8 @@ async function parseViaZhipuAgent(rawText, config, options) {
   const now = new Date();
   const todayDate = now.toISOString().split('T')[0];
   const currentTime = now.toTimeString().split(' ')[0];
-  const userPrompt = `今天的日期是 ${todayDate}，当前时间是 ${currentTime}。\n\n请从以下文本中提取日程 (以 JSON 返回，格式 {"events":[{"title":"","startTime":"YYYY-MM-DD HH:mm","endTime":"YYYY-MM-DD HH:mm","location":""}]}, 不要包含其他文字)：\n`;
+  const timezoneStr = buildTimezoneString();
+  const userPrompt = `今天的日期是 ${todayDate}，当前时间是 ${currentTime}，当前时区为 ${timezoneStr}。\n请从以下文本中提取日程：\n`;
   const body = {
     app_id: agentId,
     messages: [
@@ -98,18 +192,8 @@ async function parseViaZhipuAgent(rawText, config, options) {
   const json = await resp.json();
   const content = json.choices?.[0]?.messages?.content?.msg;
   if (!content) throw new Error('LLM 返回空内容');
-  let parsed;
-  try { parsed = JSON.parse(content); } catch {
-    // Include a clipped snippet of the LLM output to help diagnose parse issues
-    throw new Error('解析 LLM JSON 失败。' + buildSnippet('LLM 输出片段', content));
-  }
-  if (!Array.isArray(parsed.events)) throw new Error('事件结构无效');
-  const events = parsed.events.map((ev) => ({
-    ...ev,
-    startTime: parseLLMTime(ev.startTime),
-    endTime: parseLLMTime(ev.endTime),
-  })).filter((ev) => ev.title && ev.startTime && ev.endTime);
-  return events;
+  const calendarName = config.calendarName || options.calendarName || 'LLM-Parsed';
+  return ensureCalendarFromContent(content, { calendarName }, 'LLM 输出片段');
 }
 
 // --------------- ChatGPT Agent (Built-in Prompt) ---------------
@@ -134,12 +218,27 @@ async function parseViaChatGPTAgent(rawText, config, options){
   const todayDate = now.toISOString().split('T')[0];
   const currentTime = now.toTimeString().split(' ')[0];
 
-  const builtPrompt = `你是一个能够提取和格式化日程信息的助手。你的任务是从一段可能包含大量杂乱信息的非结构化文本中，准确识别出有效的日程事件，并将其转换为符合 iCalendar 标准的 JSON 格式（不是 .ics 文件，而是其结构化 JSON 表达，方便程序进一步生成 .ics 上传到 radical 日历服务器）。\n\n【输入可能包含】：\n- 事件名称、日期、开始时间、结束时间、时区\n- 事件描述\n- 事件地点\n- 可能还有与日程无关的杂乱信息（如广告、签名、重复内容）\n- 有时日期或时间会用自然语言描述（例如“明天下午3点”）\n\n【解析要求】：\n1. 从输入文本中提取所有有用的日程信息，忽略无关内容。\n2. 处理时间时，优先解析为 YYYYMMDDTHHMMSSZ 或带时区的 ISO 格式（例如 20250812T090000+0800）。\n3. 对于跨越多天的事件，需要将事件拆分为开始和结束时间点。\n4. 如果某些信息缺失（例如结束时间），保持字段为空字符串或 null。\n5. 如果无法解析出任何有效的日程，返回空的事件列表。\n6. 支持识别相对时间（如“明天”“下周一”），并转为绝对时间（需使用当前日期上下文）。\n7. 注意Title的完整性，比如文本前文出现项目名称需补全。\n\n【输出 JSON 格式要求】：\n顶层对象，包含 events 数组：每个事件包含 title,startTime,endTime,location,description。\n\n【输出要求】：\n- 只输出 JSON，不要包含额外文字或解释。\n- 确保可被 JSON.parse 解析。\n- 多事件按时间顺序排序。\n- 可缺失的字段使用空字符串或 null。\n  下面是需要解析生成JSON的内容，当前日期：${todayDate} 当前时间：${currentTime}。事件包含为下面的信息中：\n`;
+  // const builtPrompt = `你是一个能够提取和格式化日程信息的助手。你的任务是从一段可能包含大量杂乱信息的非结构化文本中，准确识别出有效的日程事件，并将其转换为符合 iCalendar 标准的 JSON 格式（不是 .ics 文件，而是其结构化 JSON 表达，方便程序进一步生成 .ics 上传到 radical 日历服务器）。\n\n【输入可能包含】：\n- 事件名称、日期、开始时间、结束时间、时区\n- 事件描述\n- 事件地点\n- 可能还有与日程无关的杂乱信息（如广告、签名、重复内容）\n- 有时日期或时间会用自然语言描述（例如“明天下午3点”）\n\n【解析要求】：\n1. 从输入文本中提取所有有用的日程信息，忽略无关内容。\n2. 处理时间时，优先解析为 YYYYMMDDTHHMMSSZ 或带时区的 ISO 格式（例如 20250812T090000+0800）。\n3. 对于跨越多天的事件，需要将事件拆分为开始和结束时间点。\n4. 如果某些信息缺失（例如结束时间），保持字段为空字符串或 null。\n5. 如果无法解析出任何有效的日程，返回空的事件列表。\n6. 支持识别相对时间（如“明天”“下周一”），并转为绝对时间（需使用当前日期上下文）。\n7. 注意Title的完整性，比如文本前文出现项目名称需补全。\n\n【输出 JSON 格式要求】：\n顶层对象，包含 events 数组：每个事件包含 title,startTime,endTime,location,description。\n\n【输出要求】：\n- 只输出 JSON，不要包含额外文字或解释。\n- 确保可被 JSON.parse 解析。\n- 多事件按时间顺序排序。\n- 可缺失的字段使用空字符串或 null。\n  下面是需要解析生成JSON的内容，当前日期：${todayDate} 当前时间：${currentTime}。事件包含为下面的信息中：\n`;
+  const timezoneStr = buildTimezoneString();
+  const builtPrompt = `今天的日期是 ${todayDate}，当前时间是 ${currentTime}，当前时区为 ${timezoneStr}。\n请从以下文本中提取日程：\n`;
   const body = {
     model,
     temperature: 0.2,
     messages: [
-      { role:'system', content: '专注日程抽取。严格仅输出 {"events":[...]} JSON。' },
+      { role:'system', content: `你是一个能够提取和格式化日程信息的助手。
+你的任务是从一段可能包含大量杂乱信息的非结构化文本中，准确识别出有效的日程事件，并将其转换为符合 iCalendar 标准的ICS格式。
+
+【输入可能包含】：
+- 事件名称、日期、开始时间、结束时间、时区
+- 事件描述——这部分要更好的总结
+- 事件地点
+- 可能还有与日程无关的杂乱信息（如广告、签名、重复内容）——这部分要过略掉
+- 有时日期或时间会用自然语言描述（例如“明天下午3点”）
+
+【解析要求】：
+1. 从输入文本中提取所有**有用**的日程信息，忽略无关内容。
+2. 输出为ICS格式的
+` },
       { role:'user', content: builtPrompt + inputText.slice(0, 8000) }
     ],
     response_format: { type: 'json_object' }
@@ -154,16 +253,8 @@ async function parseViaChatGPTAgent(rawText, config, options){
   const json = await resp.json();
   const content = json.choices?.[0]?.message?.content;
   if(!content) throw new Error('返回空内容');
-  let parsed;
-  try { parsed = JSON.parse(content); } catch { throw new Error('解析 JSON 失败。'+ buildSnippet('输出片段', content)); }
-  if(!Array.isArray(parsed.events)) throw new Error('事件结构无效');
-  const events = parsed.events.map(ev => ({
-    ...ev,
-    startTime: parseLLMTime(ev.startTime) || parseLLMTime(ev.start_time) || ev.startTime,
-    endTime: parseLLMTime(ev.endTime) || parseLLMTime(ev.end_time) || ev.endTime,
-    description: ev.description
-  })).filter(ev => ev.title && ev.startTime && ev.endTime);
-  return events;
+  const calendarName = config.calendarName || options.calendarName || 'LLM-Parsed';
+  return ensureCalendarFromContent(content, { calendarName }, '输出片段');
 }
 
 // --------------- Bailian Agent (Apps Completion API) ---------------
@@ -188,8 +279,9 @@ async function parseViaBailianAgent(rawText, config, options){
   const now = new Date();
   const todayDate = now.toISOString().split('T')[0];
   const currentTime = now.toTimeString().split(' ')[0];
-  const userPrompt = `今天日期 ${todayDate} 当前时间 ${currentTime}，请从以下文本中提取日程事件，仅输出 JSON: {"events":[{"title":"","startTime":"YYYY-MM-DD HH:mm","endTime":"YYYY-MM-DD HH:mm","location":"","description":""}]}. 文本：\n`;
-
+  const timezoneStr = buildTimezoneString();
+  const userPrompt = `今天的日期是 ${todayDate}，当前时间是 ${currentTime}，当前时区为 ${timezoneStr}。\n请从以下文本中提取日程：\n`;
+  // const userPrompt = `今天的日期是 ${todayDate}，当前时间是 ${currentTime}。\n请从以下文本中提取日程：\n`;
   // Bailian apps completion commonly uses messages-based input
   const body = {
     input: {
@@ -210,22 +302,8 @@ async function parseViaBailianAgent(rawText, config, options){
   // The content may appear as output.text or choices-like structure depending on app
   const content = json.output?.text || json.output || json.result || json.data || '';
   if(!content || typeof content !== 'string') throw new Error('Bailian 返回空内容');
-  let matched = content.trim();
-  matched = matched.replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
-  const braceIdx = matched.indexOf('{');
-  if(braceIdx > 0) matched = matched.slice(braceIdx);
-  let parsed;
-  try { parsed = JSON.parse(matched); } catch {
-    throw new Error('解析 Bailian JSON 失败。'+ buildSnippet('输出片段', matched));
-  }
-  if(!Array.isArray(parsed.events)) throw new Error('事件结构无效');
-  const events = parsed.events.map(ev => ({
-    ...ev,
-    startTime: parseLLMTime(ev.startTime) || parseLLMTime(ev.start_time) || ev.startTime,
-    endTime: parseLLMTime(ev.endTime) || parseLLMTime(ev.end_time) || ev.endTime,
-    description: ev.description
-  })).filter(ev => ev.title && ev.startTime && ev.endTime);
-  return events;
+  const calendarName = config.calendarName || options.calendarName || 'LLM-Parsed';
+  return ensureCalendarFromContent(content, { calendarName }, '输出片段');
 }
 
 // --------------- JSON Mapping ---------------
@@ -403,5 +481,8 @@ async function parseViaJsonMapping(rawText, config, options = {}) {
     if (!title || !s2 || !e2) continue;
     out.push({ id: uid, title, startTime: s2, endTime: e2, location, description, raw: it });
   }
-  return out;
+  const calendarName = config.calendarName || options.calendarName || 'JSON-Mapped';
+  const payload = ensureCalendarPayload({ events: out }, { calendarName });
+  payload.calendarName = calendarName;
+  return payload;
 }
