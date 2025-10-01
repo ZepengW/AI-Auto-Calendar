@@ -15,16 +15,29 @@ let parsersCache = [];
 let serversCache = [];
 const FALLBACK_CALENDAR_NAME = 'AI-Auto-Calendar';
 
-function applyPayload(payload, fallbackName){
+function applyPayload(payload, preferredName, opts = {}){
+  const { allowFallback = true } = opts;
   const options = {};
-  const fallback = resolveCalendarName(fallbackName);
-  if(fallback) options.calendarName = fallback;
+  const trimmedPreferred = typeof preferredName === 'string' ? preferredName.trim() : '';
+  let fallbackName = '';
+  if(trimmedPreferred){
+    fallbackName = trimmedPreferred;
+  } else if(allowFallback){
+    fallbackName = resolveCalendarName('');
+  }
+  if(fallbackName) options.calendarName = fallbackName;
   const prevRaw = currentPayload?.rawIcsText;
   currentPayload = ensureCalendarPayload(payload || {}, options);
   if(!currentPayload.rawIcsText && (payload?.rawIcsText || prevRaw)){
     currentPayload.rawIcsText = payload?.rawIcsText || prevRaw;
   }
-  if(!currentPayload.calendarName && options.calendarName) currentPayload.calendarName = options.calendarName;
+  if(!currentPayload.calendarName){
+    if(trimmedPreferred){
+      currentPayload.calendarName = trimmedPreferred;
+    } else if(fallbackName){
+      currentPayload.calendarName = fallbackName;
+    }
+  }
   currentEvents = currentPayload.events;
 }
 
@@ -65,11 +78,19 @@ function getActiveServer(){
 
 function resolveCalendarName(preferred){
   const trimmed = typeof preferred === 'string' ? preferred.trim() : '';
-  if(trimmed) return trimmed;
   const server = getActiveServer();
   const serverDefault = typeof server?.config?.defaultCalendarName === 'string'
     ? server.config.defaultCalendarName.trim()
     : '';
+  if(trimmed){
+    if(trimmed === 'ICS-Manual'){
+      return serverDefault || FALLBACK_CALENDAR_NAME;
+    }
+    if(serverDefault && trimmed === FALLBACK_CALENDAR_NAME){
+      return serverDefault;
+    }
+    return trimmed;
+  }
   if(serverDefault) return serverDefault;
   return FALLBACK_CALENDAR_NAME;
 }
@@ -137,9 +158,9 @@ async function parseIcsText(raw){
   if(!text){ showMessage('请输入 ICS 文本','error'); return; }
   try {
     const area = qs('rawInput'); if(area) area.value = text;
-    const calendarName = findCalendarNameInIcs(text) || 'ICS-Manual';
-    const payload = ensureCalendarPayload({ icsText: text, rawIcsText: text, calendarName }, { calendarName });
-    applyPayload(payload, calendarName);
+    const calendarName = findCalendarNameInIcs(text);
+    const payload = ensureCalendarPayload({ icsText: text, rawIcsText: text, calendarName: calendarName || undefined }, calendarName ? { calendarName } : {});
+    applyPayload(payload, calendarName, { allowFallback: false });
     renderEvents();
     showMessage('载入 ICS 成功，共 '+ currentEvents.length +' 条','success');
   } catch(e){
