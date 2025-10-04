@@ -292,7 +292,7 @@ async function mergeUploadWithRadicale(events, calendarName, server, meta = {}){
   const cfg = server?.config || {};
   // Lazy load settings for debug flag (avoid circular import at top-level to keep tree-shake simple)
   let settings = null;
-  try { settings = await loadSettings(); } catch(_) { settings = { debugServerDiff:false }; }
+  try { settings = await loadSettings(); } catch(_) { settings = { debugServerDiff:true }; }
   const debugDiff = !!settings.debugServerDiff;
   const baseRaw = (cfg.base || '').trim();
   if(!baseRaw) throw new Error('未配置 Radicale 基础地址');
@@ -865,7 +865,16 @@ async function uploadToGoogleCalendar(events, calendarName, server, meta = {}){
     const end = item.end?.date ? { date: item.end.date } : (item.end?.dateTime ? { dateTime: item.end.dateTime, timeZone: item.end.timeZone } : null);
     return { start, end };
   }
-  function equalPayload(a,b){ return JSON.stringify(a) === JSON.stringify(b); }
+  function sameDateLike(a,b){
+    if(!a || !b) return false;
+    if(a.date && b.date) return a.date === b.date; // all-day
+    if(a.dateTime && b.dateTime){
+      const t1 = Date.parse(a.dateTime);
+      const t2 = Date.parse(b.dateTime);
+      if(Number.isFinite(t1) && Number.isFinite(t2)) return t1 === t2; // absolute instant match
+    }
+    return false;
+  }
   function arraysEqual(a,b){ if(!Array.isArray(a)&&!Array.isArray(b)) return true; if(!Array.isArray(a)||!Array.isArray(b)) return false; if(a.length!==b.length) return false; for(let i=0;i<a.length;i++){ if(a[i]!==b[i]) return false; } return true; }
   const toInsert = []; const toUpdate = []; let skipped = 0;
   const incomingSignatures = new Set();
@@ -881,27 +890,40 @@ async function uploadToGoogleCalendar(events, calendarName, server, meta = {}){
     const { start: exStart, end: exEnd } = normalizeStartEndPayload(existingItem);
     const wantStart = prepared.startPrep.payload;
     const wantEnd = prepared.endPrep.payload;
-    const wantRecurrence = prepared.recurrence || [];
-    const existingRecurrence = Array.isArray(existingItem.recurrence)? existingItem.recurrence.map(r=>r.trim()): [];
-      // Normalize alarms (popup reminders) for comparison
-      function normAlarmsGoogle(item){
-        const overrides = item?.reminders?.overrides;
-        if(!Array.isArray(overrides) || !overrides.length || item?.reminders?.useDefault) return [];
-        return overrides.filter(o=> o && (o.method==='popup'||!o.method)).map(o=> Number(o.minutes)).filter(m=> Number.isFinite(m)).sort((a,b)=>a-b);
-      }
-      function normAlarmsEv(evObj){
-        if(!Array.isArray(evObj?.alarms)) return [];
-        return evObj.alarms.map(a=> Number(a.minutesBefore)).filter(m=> Number.isFinite(m) && m>0).sort((a,b)=>a-b);
-      }
-      const existingAlarms = normAlarmsGoogle(existingItem);
-      const wantAlarms = normAlarmsEv(ev);
-      const sameAlarms = existingAlarms.length === wantAlarms.length && existingAlarms.every((v,i)=> v===wantAlarms[i]);
-      return (existingItem.summary||'').trim() === (ev.title||'').trim()
-        && (existingItem.location||'').trim() === (ev.location||'').trim()
-        && equalPayload(exStart, wantStart)
-        && equalPayload(exEnd, wantEnd)
-        && arraysEqual(existingRecurrence, wantRecurrence)
-        && sameAlarms;
+    const wantRecurrence = (prepared.recurrence || []).map(r=> r.trim().toUpperCase());
+    const existingRecurrence = Array.isArray(existingItem.recurrence)? existingItem.recurrence.map(r=> r.trim()).map(r=> r.toUpperCase()): [];
+    // Normalize alarms (popup reminders) for comparison
+    function normAlarmsGoogle(item){
+      const overrides = item?.reminders?.overrides;
+      if(!Array.isArray(overrides) || !overrides.length || item?.reminders?.useDefault) return [];
+      return overrides.filter(o=> o && (o.method==='popup'||!o.method)).map(o=> Number(o.minutes)).filter(m=> Number.isFinite(m)).sort((a,b)=>a-b);
+    }
+    function normAlarmsEv(evObj){
+      if(!Array.isArray(evObj?.alarms)) return [];
+      return evObj.alarms.map(a=> Number(a.minutesBefore)).filter(m=> Number.isFinite(m) && m>0).sort((a,b)=>a-b);
+    }
+    const existingAlarms = normAlarmsGoogle(existingItem);
+    const wantAlarms = normAlarmsEv(ev);
+    const sameAlarms = existingAlarms.length === wantAlarms.length && existingAlarms.every((v,i)=> v===wantAlarms[i]);
+    // Compare start/end with instant equivalence (timezone-insensitive)
+    const sameStart = (()=>{
+      if(!exStart || !wantStart) return false;
+      if(exStart.date || wantStart.date) return exStart.date === wantStart.date;
+      return sameDateLike(exStart, wantStart);
+    })();
+    const sameEnd = (()=>{
+      if(!exEnd || !wantEnd) return false;
+      if(exEnd.date || wantEnd.date) return exEnd.date === wantEnd.date;
+      return sameDateLike(exEnd, wantEnd);
+    })();
+    const sameRecurrence = arraysEqual(existingRecurrence, wantRecurrence);
+    // Description normalization (treat 'Reminder' placeholder as empty)
+    const descA = (/^Reminder$/i.test(existingItem.description||'') ? '' : (existingItem.description||'').trim());
+    const descB = (/^Reminder$/i.test(ev.description||'') ? '' : (ev.description||'').trim());
+    const sameDesc = descA === descB;
+    return (existingItem.summary||'').trim() === (ev.title||'').trim()
+      && (existingItem.location||'').trim() === (ev.location||'').trim()
+      && sameStart && sameEnd && sameRecurrence && sameAlarms && sameDesc;
   }
   for(const ev of events){
     const prepared = prepareGoogleEvent(ev); if(!prepared){ skipped++; continue; }
@@ -926,6 +948,18 @@ async function uploadToGoogleCalendar(events, calendarName, server, meta = {}){
     // Fallback signature exact match (identical content)
     if(existingBySig.has(prepared.signature)){ skipped++; continue; }
     toInsert.push(prepared);
+  }
+  // Collapse no-op updates (reclassification) in case timezone / description / recurrence canonicalization deems them identical
+  if(toUpdate.length){
+    const stillUpdate = [];
+    for(const item of toUpdate){
+      if(sameGoogleLogical(item.existing, item.prepared, item.prepared.event)){
+        skipped++; // treat as skipped now
+      } else {
+        stillUpdate.push(item);
+      }
+    }
+    toUpdate.length = 0; toUpdate.push(...stillUpdate);
   }
   // Coverage deletion plan (Google): delete existing events inside window that are not present in incoming
   let toDelete = [];
