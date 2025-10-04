@@ -230,11 +230,68 @@ async function mergeUploadWithRadicale(events, calendarName, server, meta = {}){
     horizonDays: meta?.recurrenceHorizonDays || 365,
     maxOccurrences: meta?.maxRecurrenceInstances || 400,
   });
-  const merged = mergeEvents(existingParsed, expandedIncoming);
+  let kept = existingParsed;
+  let deleted = 0;
+  // Precompute existing signature map for stats
+  const existingSigMap = new Map();
+  for(const ev of existingParsed){ existingSigMap.set(normalizeForMerge(ev), ev); }
+  if(meta?.coverage && meta.windowStart instanceof Date && meta.windowEnd instanceof Date){
+    const startMs = meta.windowStart.getTime();
+    const endMs = meta.windowEnd.getTime();
+    const incomingSet = new Set(expandedIncoming.map(e => normalizeForMerge(e)));
+    kept = existingParsed.filter(ev => {
+      const sig = normalizeForMerge(ev);
+      if(incomingSet.has(sig)) return true; // will be merged/updated
+      const s = ev.startTime instanceof Date ? ev.startTime.getTime() : NaN;
+      if(!isNaN(s) && s >= startMs && s <= endMs){
+        return false; // drop inside window not present in incoming -> coverage deletion
+      }
+      return true; // keep outside window
+    });
+    deleted = existingParsed.length - kept.length;
+  }
+  const merged = mergeEvents(kept, expandedIncoming);
+  // Stats (day+title rule): same day (YYYY-MM-DD in local) + title considered the same logical event.
+  function dayTitleKey(ev){
+    if(!ev || !ev.startTime || !ev.title) return '';
+    const d = ev.startTime instanceof Date ? ev.startTime : new Date(ev.startTime);
+    if(!(d instanceof Date) || isNaN(d)) return '';
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth()+1).padStart(2,'0');
+    const dd = String(d.getDate()).padStart(2,'0');
+    return `${(ev.title||'').trim().toLowerCase()}|${yyyy}-${mm}-${dd}`;
+  }
+  const existingDayTitleMap = new Map();
+  for(const ev of existingParsed){
+    const k = dayTitleKey(ev);
+    if(k && !existingDayTitleMap.has(k)) existingDayTitleMap.set(k, ev);
+  }
+  let inserted = 0, updated = 0, skipped = 0;
+  for(const ev of expandedIncoming){
+    const k = dayTitleKey(ev);
+    if(!k){ skipped++; continue; }
+    if(!existingDayTitleMap.has(k)){
+      inserted++; continue;
+    }
+    const prev = existingDayTitleMap.get(k);
+    // Compare key fields (time range, location, description, rrule)
+    const changed = (()=>{
+      const eqDate = (a,b)=> (a instanceof Date && b instanceof Date) ? a.getTime()===b.getTime() : String(a||'')===String(b||'');
+      if(!eqDate(prev.startTime, ev.startTime)) return true;
+      if(!eqDate(prev.endTime, ev.endTime)) return true;
+      if((prev.location||'').trim() !== (ev.location||'').trim()) return true;
+      if((prev.description||'').trim() !== (ev.description||'').trim()) return true;
+      if((prev.rrule||'').trim() !== (ev.rrule||'').trim()) return true;
+      return false;
+    })();
+    if(changed) updated++; else skipped++;
+  }
   const ics = buildICS(merged, calendarName);
   const putHeaders = { 'Content-Type': 'text/calendar; charset=utf-8', ...headers };
   const put = await fetch(url, { method:'PUT', headers: putHeaders, body: ics });
-  if(put.status === 200 || put.status === 201 || put.status === 204){ return { ok:true, total: merged.length, url }; }
+  if(put.status === 200 || put.status === 201 || put.status === 204){
+    return { ok:true, total: merged.length, url, coverage: !!meta?.coverage, deleted, inserted, updated, skipped };
+  }
   throw new Error('上传失败 ' + put.status);
 }
 
@@ -565,66 +622,156 @@ async function uploadToGoogleCalendar(events, calendarName, server, meta = {}){
   if(!listRes.ok) throw new Error('获取现有事件失败: ' + listRes.status);
   listJson = await listRes.json();
   const existing = Array.isArray(listJson.items) ? listJson.items : [];
-  const existingMap = new Map();
+  const existingBySig = new Map();
+  const existingByUid = new Map();
+  const existingByDayTitle = new Map(); // day+title logical mapping
+  function buildDayTitleKeyFromExisting(item){
+    if(!item) return '';
+    const title = (item.summary||'').trim().toLowerCase();
+    if(!title) return '';
+    let datePart = '';
+    if(item.start?.date){
+      datePart = item.start.date; // already YYYY-MM-DD
+    } else if(item.start?.dateTime){
+      try { const dt = new Date(item.start.dateTime); if(!isNaN(dt)) datePart = dt.toISOString().slice(0,10); } catch(_){ }
+    }
+    if(!datePart) return '';
+    return `${title}|${datePart}`;
+  }
   for (const it of existing) {
     const sig = buildExistingGoogleSignature(it);
-    if (sig) existingMap.set(sig, it);
+    if (sig && !existingBySig.has(sig)) existingBySig.set(sig, it);
+    const iCal = (it.iCalUID || '').trim().toLowerCase();
+    if(iCal && !existingByUid.has(iCal)) existingByUid.set(iCal, it);
+    const k = buildDayTitleKeyFromExisting(it);
+    if(k && !existingByDayTitle.has(k)) existingByDayTitle.set(k, it);
   }
-  // Compute insertions
-  const toInsert = [];
-  for (const ev of events) {
-    const prepared = prepareGoogleEvent(ev);
-    if (!prepared) continue;
-    if (existingMap.has(prepared.signature)) continue;
+  function normalizeStartEndPayload(item){
+    if(!item) return { start:null, end:null };
+    const start = item.start?.date ? { date: item.start.date } : (item.start?.dateTime ? { dateTime: item.start.dateTime, timeZone: item.start.timeZone } : null);
+    const end = item.end?.date ? { date: item.end.date } : (item.end?.dateTime ? { dateTime: item.end.dateTime, timeZone: item.end.timeZone } : null);
+    return { start, end };
+  }
+  function equalPayload(a,b){ return JSON.stringify(a) === JSON.stringify(b); }
+  function arraysEqual(a,b){ if(!Array.isArray(a)&&!Array.isArray(b)) return true; if(!Array.isArray(a)||!Array.isArray(b)) return false; if(a.length!==b.length) return false; for(let i=0;i<a.length;i++){ if(a[i]!==b[i]) return false; } return true; }
+  const toInsert = []; const toUpdate = []; let skipped = 0;
+  const incomingSignatures = new Set();
+  const incomingUids = new Set();
+  function dayTitleKeyForIncoming(ev){
+    if(!ev || !ev.startTime || !ev.title) return '';
+    const d = ev.startTime instanceof Date ? ev.startTime : new Date(ev.startTime);
+    if(!(d instanceof Date) || isNaN(d)) return '';
+    const datePart = d.toISOString().slice(0,10);
+    return `${(ev.title||'').trim().toLowerCase()}|${datePart}`;
+  }
+  function sameGoogleLogical(existingItem, prepared, ev){
+    const { start: exStart, end: exEnd } = normalizeStartEndPayload(existingItem);
+    const wantStart = prepared.startPrep.payload;
+    const wantEnd = prepared.endPrep.payload;
+    const wantRecurrence = prepared.recurrence || [];
+    const existingRecurrence = Array.isArray(existingItem.recurrence)? existingItem.recurrence.map(r=>r.trim()): [];
+    return (existingItem.summary||'').trim() === (ev.title||'').trim()
+      && (existingItem.location||'').trim() === (ev.location||'').trim()
+      && equalPayload(exStart, wantStart)
+      && equalPayload(exEnd, wantEnd)
+      && arraysEqual(existingRecurrence, wantRecurrence);
+  }
+  for(const ev of events){
+    const prepared = prepareGoogleEvent(ev); if(!prepared){ skipped++; continue; }
+    incomingSignatures.add(prepared.signature);
+    const uid = (ev.uid || ev.id || '').trim();
+    const lowerUid = uid.toLowerCase();
+    if(lowerUid) incomingUids.add(lowerUid);
+    const existingByThisUid = lowerUid ? existingByUid.get(lowerUid) : null;
+    if(existingByThisUid){
+      if(sameGoogleLogical(existingByThisUid, prepared, ev)){ skipped++; continue; }
+      toUpdate.push({ prepared, existing: existingByThisUid });
+      continue;
+    }
+    // Day + title matching
+    const dayTitleKey = dayTitleKeyForIncoming(ev);
+    if(dayTitleKey && existingByDayTitle.has(dayTitleKey)){
+      const existingItem = existingByDayTitle.get(dayTitleKey);
+      if(sameGoogleLogical(existingItem, prepared, ev)){ skipped++; continue; }
+      toUpdate.push({ prepared, existing: existingItem });
+      continue;
+    }
+    // Fallback signature exact match (identical content)
+    if(existingBySig.has(prepared.signature)){ skipped++; continue; }
     toInsert.push(prepared);
   }
-  let inserted = 0;
-  for (const prepared of toInsert) {
-    const ev = prepared.event;
-    const body = {
-      summary: ev.title,
-      location: ev.location || undefined,
-      description: ev.description ? String(ev.description) : undefined,
-      start: prepared.startPrep.payload,
-      end: prepared.endPrep.payload,
-    };
-    if (prepared.recurrence && prepared.recurrence.length) {
-      body.recurrence = prepared.recurrence;
+  // Coverage deletion plan (Google): delete existing events inside window that are not present in incoming
+  let toDelete = [];
+  if(meta?.coverage && meta.windowStart instanceof Date && meta.windowEnd instanceof Date){
+    const startMs = meta.windowStart.getTime();
+    const endMs = meta.windowEnd.getTime();
+    for(const ex of existing){
+      // Derive start time millis
+      let sMs = NaN;
+      if(ex.start?.dateTime){ sMs = Date.parse(ex.start.dateTime); }
+      else if(ex.start?.date){ sMs = Date.parse(ex.start.date + 'T00:00:00Z'); }
+      if(!Number.isFinite(sMs)) continue;
+      if(sMs < startMs || sMs > endMs) continue; // outside window keep
+      const sig = buildExistingGoogleSignature(ex);
+      const uidLower = (ex.iCalUID||'').trim().toLowerCase();
+      if((uidLower && incomingUids.has(uidLower)) || (sig && incomingSignatures.has(sig))){
+        continue; // present in new set
+      }
+      // Skip deleting expanded instances of recurring series to avoid partial deletions (heuristic)
+      if(ex.recurringEventId){
+        continue; // leave recurring series management to future improvement
+      }
+      toDelete.push(ex);
     }
-    if (ev.uid) body.iCalUID = String(ev.uid);
-    else if (ev.id) body.iCalUID = String(ev.id);
-    const url = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
-    let res;
-    try {
-      res = await fetch(url, { method:'POST', headers:{ 'Authorization': `Bearer ${accessToken}`, 'Content-Type':'application/json' }, body: JSON.stringify(body) });
-    } catch(e){
-      throw new Error('创建事件失败: ' + (e?.message||e));
-    }
+  }
+  async function authRetryWrapper(doRequest){
+    let res = await doRequest();
     if(res.status === 401){
-      // identity refresh first (single retry only)
       if(hasManifestOauth && chrome?.identity?.getAuthToken){
         try {
           const refreshed = await refreshChromeIdentityToken(accessToken);
-          if(refreshed){
-            const stored = await persistIdentityToken(refreshed);
-            accessToken = stored?.access_token || refreshed;
-          }
-          res = await fetch(url, { method:'POST', headers:{ 'Authorization': `Bearer ${accessToken}`, 'Content-Type':'application/json' }, body: JSON.stringify(body) });
-        } catch(_){ /* fallback */ }
+          if(refreshed){ const stored = await persistIdentityToken(refreshed); accessToken = stored?.access_token || refreshed; }
+          res = await doRequest();
+        } catch(_){ }
       }
-      if(!res || res.status === 401){
+      if(res.status === 401){
         const t3 = await refreshGoogleToken(server.id, { clientId, clientSecret });
-        try {
-          res = await fetch(url, { method:'POST', headers:{ 'Authorization': `Bearer ${t3?.access_token||t3?.accessToken}`, 'Content-Type':'application/json' }, body: JSON.stringify(body) });
-        } catch(e){
-          throw new Error('创建事件失败(重试): ' + (e?.message||e));
-        }
+        if(t3?.access_token || t3?.accessToken){ accessToken = t3.access_token||t3.accessToken; res = await doRequest(); }
       }
     }
-    if(res.ok) inserted++; else throw new Error('插入事件失败: ' + res.status);
+    return res;
   }
-  const total = (existing?.length || 0) + inserted;
-  return { ok:true, total, inserted };
+  let inserted = 0, updated = 0, deleted = 0;
+  // Perform deletions first to keep window clean (optional ordering)
+  for(const ex of toDelete){
+    const delUrl = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(ex.id)}`;
+    const res = await authRetryWrapper(()=> fetch(delUrl, { method:'DELETE', headers:{ 'Authorization': `Bearer ${accessToken}` } }));
+    if(res.status === 204 || res.status === 200){ deleted++; continue; }
+    if(res.status === 404){ continue; }
+    throw new Error('删除事件失败: ' + res.status);
+  }
+  for(const item of toUpdate){
+    const { prepared, existing: ex } = item;
+    const ev = prepared.event;
+    const body = { summary: ev.title, location: ev.location || undefined, description: ev.description? String(ev.description):undefined, start: prepared.startPrep.payload, end: prepared.endPrep.payload };
+    if(prepared.recurrence && prepared.recurrence.length) body.recurrence = prepared.recurrence;
+    const updateUrl = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(ex.id)}`;
+    const res = await authRetryWrapper(()=> fetch(updateUrl, { method:'PATCH', headers:{ 'Authorization': `Bearer ${accessToken}`, 'Content-Type':'application/json' }, body: JSON.stringify(body) }));
+    if(res.ok) updated++; else { if(res.status === 409){ updated++; continue; } throw new Error('更新事件失败: ' + res.status); }
+  }
+  for(const prepared of toInsert){
+    const ev = prepared.event;
+    const body = { summary: ev.title, location: ev.location || undefined, description: ev.description? String(ev.description):undefined, start: prepared.startPrep.payload, end: prepared.endPrep.payload };
+    if(prepared.recurrence && prepared.recurrence.length) body.recurrence = prepared.recurrence;
+    if(ev.uid) body.iCalUID = String(ev.uid); else if(ev.id) body.iCalUID = String(ev.id);
+    const createUrl = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;
+    const res = await authRetryWrapper(()=> fetch(createUrl, { method:'POST', headers:{ 'Authorization': `Bearer ${accessToken}`, 'Content-Type':'application/json' }, body: JSON.stringify(body) }));
+    if(res.ok){ inserted++; continue; }
+    if(res.status === 409){ try { const errJson = await res.json(); if(errJson?.error?.errors?.[0]?.reason === 'duplicate'){ skipped++; continue; } } catch(_){ } }
+    throw new Error('插入事件失败: ' + res.status);
+  }
+  const total = existing.length - deleted + inserted; // updates don't change count
+  return { ok:true, total, inserted, updated, skipped, deleted, coverage: !!meta?.coverage };
 }
 
 // ---------------- Google OAuth helpers ----------------

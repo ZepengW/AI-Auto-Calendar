@@ -2,8 +2,9 @@
 // ----------------------------------------------------
 // DEFAULTS: unified default configuration for storage fallbacks
 export const DEFAULTS = {
-  radicalBase: 'http://127.0.0.1:5232',
-  radicalUsername: 'user',
+  // 默认不再预置本地 Radicale，避免无意自动访问 127.0.0.1 请求权限
+  radicalBase: '',
+  radicalUsername: '',
   radicalAuth: '',
   autoSyncMinutes: 60,
   dateWindowDays: 14,
@@ -760,13 +761,37 @@ export function buildICSCalendar(events, options = {}) {
     lines.push('BEGIN:VEVENT');
     lines.push(`UID:${uid}`);
     lines.push(`DTSTAMP:${isoToICSTime(now)}`);
-    lines.push(`DTSTART:${isoToICSTime(start)}`);
-    lines.push(`DTEND:${isoToICSTime(end)}`);
+    // All-day events should use DATE format per RFC5545 (VALUE=DATE)
+    if(ev.allDay){
+      const fmtDate = (d)=> d.toISOString().split('T')[0].replace(/-/g,'');
+      lines.push(`DTSTART;VALUE=DATE:${fmtDate(start)}`);
+      // For all-day, DTEND is non-inclusive next day; adjust if same day
+      const endAdj = (end.getHours()===0 && end.getMinutes()===0 && end.getSeconds()===0) ? end : new Date(end.getTime());
+      lines.push(`DTEND;VALUE=DATE:${fmtDate(endAdj)}`);
+    } else {
+      lines.push(`DTSTART:${isoToICSTime(start)}`);
+      lines.push(`DTEND:${isoToICSTime(end)}`);
+    }
     lines.push(`SUMMARY:${escapeICSText(ev.title)}`);
     if (ev.location) lines.push(`LOCATION:${escapeICSText(ev.location)}`);
     if (ev.status) lines.push(`STATUS:${escapeICSText(ev.status)}`);
+    if (ev.transp) lines.push(`TRANSP:${escapeICSText(ev.transp)}`);
     if (ev.rrule) lines.push(`RRULE:${String(ev.rrule).trim()}`);
     if (ev.description) lines.push(`DESCRIPTION:${escapeICSText(ev.description)}`);
+    if (Array.isArray(ev.categories) && ev.categories.length){
+      lines.push(`CATEGORIES:${ev.categories.map(c=>escapeICSText(c)).join(',')}`);
+    }
+    if (Array.isArray(ev.alarms)){
+      for(const al of ev.alarms){
+        const mins = Number(al.minutesBefore);
+        if(!Number.isFinite(mins) || mins<=0) continue;
+        lines.push('BEGIN:VALARM');
+        lines.push(`TRIGGER:-PT${Math.floor(mins)}M`);
+        lines.push('ACTION:DISPLAY');
+        if(al.description) lines.push(`DESCRIPTION:${escapeICSText(al.description)}`); else lines.push('DESCRIPTION:Reminder');
+        lines.push('END:VALARM');
+      }
+    }
     lines.push('END:VEVENT');
   }
   lines.push('END:VCALENDAR');

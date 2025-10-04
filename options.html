@@ -250,11 +250,14 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                         <legend style="padding:0 8px;font-size:13px;font-weight:600;color:#0f172a">数据获取</legend>
                         <div style="display:flex;flex-direction:column;gap:14px">
                             <label style="width:220px;font-size:13px">模式
-                                <select id="task_mode" style="margin-top:4px"><option value="HTTP_GET_JSON">HTTP_GET_JSON</option></select>
+                                <select id="task_mode" style="margin-top:4px">
+                                    <option value="HTTP_GET_JSON">HTTP_GET_JSON</option>
+                                    <option value="SJTU_JWB">交我办 (JWB)</option>
+                                </select>
                             </label>
                             <div id="modePanel_HTTP_GET_JSON" style="display:flex;flex-direction:column;gap:14px">
                                 <label>目标 URL
-                                    <input id="task_url" type="text" required placeholder="https://..." style="margin-top:4px">
+                                    <input id="task_url" type="text" placeholder="https://..." style="margin-top:4px">
                                 </label>
                                 <fieldset class="card" style="border:1px solid var(--border);background:#fff;border-radius:12px;padding:10px 12px">
                                     <legend style="padding:0 6px;font-size:12px;color:#0f172a">预热访问（先打开页面以刷新登录状态/Cookie）</legend>
@@ -281,6 +284,19 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                                 <div class="note" style="margin:0;line-height:1.55">
                                     说明：对JSON格式的返回结果进行部分内容输入到解析节点进行解析。支持多级嵌套和数据索引。<br>
                                     留空：不裁剪（可能上下文冗余大）。
+                                </div>
+                            </div>
+                            <div id="modePanel_SJTU_JWB" style="display:none;flex-direction:column;gap:14px">
+                                <div class="note" style="margin:0;line-height:1.5;color:#475569">交我办模式：自动预热访问门户，再抓取校历接口 <code>calendar.sjtu.edu.cn</code> 返回的事件列表。</div>
+                                <label style="width:200px">时间窗口天数（前后）
+                                    <input id="task_jwb_windowDays" type="number" min="1" max="90" value="14" style="margin-top:4px">
+                                </label>
+                                <label style="display:flex;flex-direction:row;align-items:center;gap:8px;margin:0"> 
+                                    <input id="task_jwb_coverage" type="checkbox"> 启用覆盖模式
+                                </label>
+                                <div class="note" style="margin-top:0;line-height:1.5">
+                                    覆盖模式：删除该时间窗口内在服务器日历中存在、但本次源数据缺失的事件。<br>
+                                    如果此日历还包含其它来源的事件，可能被误删，请谨慎使用。
                                 </div>
                             </div>
                         </div>
@@ -325,6 +341,7 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                             <option value="chatgpt_agent">ChatGPT Agent</option>
                             <option value="bailian_agent">阿里百炼 Agent</option>
                             <option value="json_mapping">JSON映射</option>
+                            <option value="jiaowoban">交我办专用</option>
                         </select>
                     </label>
                     <div id="parser_panel_zhipu" style="display:flex;flex-direction:column;gap:10px">
@@ -374,6 +391,18 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                             <div class="note">UID 默认值填 <code>auto</code> 时将自动生成；留空则当字段缺失时跳过。</div>
                         </fieldset>
                         <div style="font-size:12px;color:#64748b">时间字段支持多种格式，节点会自动转为符合 iCalendar 的 DTSTART/DTEND。</div>
+                    </div>
+                    <div id="parser_panel_jiaowoban" style="display:none;flex-direction:column;gap:10px">
+                        <div class="note" style="margin:0;font-size:12px;line-height:1.55;color:#475569">交我办专用解析：输入应为接口 JSON，包含 <code>data.events</code> 列表。可选自定义字段映射，不填写使用默认字段。</div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                            <label>标题字段列表<input id="p_jwb_title" type="text" placeholder="title" /></label>
+                            <label>开始时间字段<input id="p_jwb_startTime" type="text" placeholder="startTime" /></label>
+                            <label>结束时间字段<input id="p_jwb_endTime" type="text" placeholder="endTime" /></label>
+                            <label>地点字段<input id="p_jwb_location" type="text" placeholder="location" /></label>
+                            <label>Status字段<input id="p_jwb_status" type="text" placeholder="status" /></label>
+                            <label>UID字段<input id="p_jwb_id" type="text" placeholder="eventId,id" /></label>
+                        </div>
+                        <div class="note" style="margin-top:-4px">多个字段用逗号分隔；留空用默认。</div>
                     </div>
                     <div style="display:flex;gap:10px;justify-content:flex-end"><button type="submit" class="primary">保存</button></div>
                 </form>
@@ -425,6 +454,23 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                     <option value="500">500</option>
                     <option value="1000">1000</option>
                 </select>
+                <label style="margin-left:12px">类型</label>
+                <select id="log-type-filter">
+                    <option value="all" selected>全部</option>
+                    <option value="trigger">触发</option>
+                    <option value="result_ok">结果-成功</option>
+                    <option value="result_fail">结果-失败</option>
+                    <option value="coverage">覆盖结果</option>
+                </select>
+                <label style="margin-left:12px">模式</label>
+                <select id="log-mode-filter">
+                    <option value="all" selected>全部</option>
+                    <option value="direct">direct</option>
+                    <option value="llm">llm</option>
+                    <option value="jwb">jwb</option>
+                </select>
+                <label style="margin-left:12px">任务</label>
+                <input id="log-task-filter" type="text" placeholder="名称包含..." style="padding:4px 6px;font-size:12px;width:140px" />
                 <button id="btn-refresh-logs">刷新</button>
                 <button id="btn-clear-logs">清空</button>
             </div>

@@ -4,6 +4,7 @@
 // - 'chatgpt_agent': 内置提示的 ChatGPT Agent 抽取（model+apiKey）
 // - 'bailian_agent': 阿里百炼 Agent API (agentId + apiKey)
 // - 'json_mapping': Map fields from JSON list using simple path selection
+// - 'jiaowoban': 专用“交我办”结构化 JSON -> events 直通解析（data.events[*]）
 import { loadSettings, DEFAULTS, ensureCalendarPayload, parseLLMTime, parseSJTUTime } from './shared.js';
 
 // Small helper to include a clipped snippet in error messages without flooding the UI
@@ -114,7 +115,7 @@ export async function loadParsers() {
   return list.map((p) => {
     let type = String(p.type || '').trim();
     if(type === 'openai_agent') type = 'chatgpt_agent'; // migrate legacy
-  const allowed = ['json_mapping','zhipu_agent','chatgpt_agent','bailian_agent'];
+  const allowed = ['json_mapping','zhipu_agent','chatgpt_agent','bailian_agent','jiaowoban'];
     if(!allowed.includes(type)) type = 'zhipu_agent';
     return { id: p.id || ('parser-' + Math.random().toString(36).slice(2)), name: p.name || '未命名解析器', type, config: p.config || {} };
   });
@@ -125,7 +126,7 @@ export async function saveParsers(parsers) {
   const list = Array.isArray(parsers) ? parsers.map((p) => {
     let type = String(p.type || '').trim();
     if(type === 'openai_agent') type = 'chatgpt_agent';
-  const allowed = ['json_mapping','zhipu_agent','chatgpt_agent','bailian_agent'];
+  const allowed = ['json_mapping','zhipu_agent','chatgpt_agent','bailian_agent','jiaowoban'];
     if(!allowed.includes(type)) type = 'zhipu_agent';
     return { id: p.id || ('parser-' + Math.random().toString(36).slice(2)), name: String(p.name || '未命名解析器'), type, config: typeof p.config === 'object' && p.config ? p.config : {} };
   }) : [];
@@ -147,6 +148,7 @@ export async function parseWithParser(rawText, parser, options = {}) {
   else if (parser.type === 'chatgpt_agent') payload = await parseViaChatGPTAgent(rawText, parser.config || {}, options);
   else if (parser.type === 'bailian_agent') payload = await parseViaBailianAgent(rawText, parser.config || {}, options);
   else if (parser.type === 'json_mapping') payload = await parseViaJsonMapping(rawText, parser.config || {}, options);
+  else if (parser.type === 'jiaowoban') payload = await parseViaJiaowoban(rawText, parser.config || {}, options);
   else throw new Error('未知解析器类型 ' + parser.type);
   const calendarName = options.calendarName || parser.config?.calendarName;
   const normalized = ensureCalendarPayload(payload, { calendarName });
@@ -482,6 +484,55 @@ async function parseViaJsonMapping(rawText, config, options = {}) {
     out.push({ id: uid, title, startTime: s2, endTime: e2, location, description, raw: it });
   }
   const calendarName = config.calendarName || options.calendarName || 'JSON-Mapped';
+  const payload = ensureCalendarPayload({ events: out }, { calendarName });
+  payload.calendarName = calendarName;
+  return payload;
+}
+
+// --------------- Jiaowoban (交我办专用) ---------------
+// 输入要求：完整接口返回 JSON 字符串 (含 data.events 数组)
+// 可选：config.fieldMap 与 json_mapping 相似；若未提供则使用交我办默认字段
+async function parseViaJiaowoban(rawText, config, options = {}){
+  let data;
+  try { data = JSON.parse(String(rawText||'').trim()); } catch { throw new Error('交我办解析：输入不是合法 JSON'); }
+  const eventsArr = data?.data?.events;
+  if(!Array.isArray(eventsArr)) throw new Error('交我办解析：未找到 data.events 数组');
+  // 仅保留必要字段：eventId(title 用 title)，location,startTime,endTime,claimIcon
+  const fm = config.fieldMap || { title:['title'], startTime:['startTime'], endTime:['endTime'], location:['location'], id:['eventId','id'], claimIcon:['claimIcon'] };
+  const listOrDefault = (v, def)=>{ const arr = Array.isArray(v)? v : (typeof v==='string'? v.split(','):[]); const clean=arr.map(s=>String(s).trim()).filter(Boolean); return clean.length?clean:def; };
+  const fTitle = listOrDefault(fm.title,['title']);
+  const fStart = listOrDefault(fm.startTime,['startTime']);
+  const fEnd = listOrDefault(fm.endTime,['endTime']);
+  const fLoc = listOrDefault(fm.location,['location']);
+  const fId = listOrDefault(fm.id,['eventId','id']);
+  const fClaim = listOrDefault(fm.claimIcon,['claimIcon']);
+  function first(obj, keys){ for(const k of keys){ if(obj && Object.prototype.hasOwnProperty.call(obj,k) && obj[k]!=null) return obj[k]; } return undefined; }
+  const out = [];
+  for(const it of eventsArr){
+    if(!it || typeof it !== 'object') continue;
+    const titleRaw = first(it, fTitle);
+    const sRaw = first(it, fStart);
+    const eRaw = first(it, fEnd);
+    if(!(titleRaw && sRaw && eRaw)) continue;
+    const locRaw = first(it, fLoc);
+    const idRaw = first(it, fId);
+    const claimRaw = first(it, fClaim);
+    const sTime = parseSJTUTime(sRaw) || parseLLMTime(sRaw) || sRaw;
+    const eTime = parseSJTUTime(eRaw) || parseLLMTime(eRaw) || eRaw;
+    const allDayFlag = it.allDay === true; // 若需要保留全天语义可继续使用
+    // claimIcon -> 3 小时前提醒
+    let alarms = undefined;
+    if(claimRaw === true || String(claimRaw).toLowerCase()==='true'){
+      alarms = [ { minutesBefore: 180} ];
+    }
+    // 仅输出所需字段（raw 保留便于后续调试）
+    const ev = { id: idRaw || undefined, title: String(titleRaw), startTime: sTime, endTime: eTime, location: locRaw||'', raw: it };
+    if(allDayFlag) ev.allDay = true;
+    if(alarms) ev.alarms = alarms;
+    out.push(ev);
+  }
+  if(!out.length) throw new Error('交我办解析：没有有效事件');
+  const calendarName = config.calendarName || options.calendarName || 'JiaoWoBan';
   const payload = ensureCalendarPayload({ events: out }, { calendarName });
   payload.calendarName = calendarName;
   return payload;

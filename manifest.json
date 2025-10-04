@@ -15,7 +15,9 @@
   "host_permissions": [
     "https://open.bigmodel.cn/*",
     "https://www.googleapis.com/*",
-    "https://oauth2.googleapis.com/*"
+    "https://oauth2.googleapis.com/*",
+    "https://calendar.sjtu.edu.cn/*",
+    "https://my.sjtu.edu.cn/*"
   ],
   "optional_host_permissions": [
     "http://*/*",

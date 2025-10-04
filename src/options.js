@@ -73,6 +73,13 @@ async function init(){
   els.p_json_def_endTime = qs('p_json_def_endTime');
   els.p_json_def_uid = qs('p_json_def_uid');
   els.p_json_def_description = qs('p_json_def_description');
+  // jiaowoban fields
+  els.p_jwb_title = qs('p_jwb_title');
+  els.p_jwb_startTime = qs('p_jwb_startTime');
+  els.p_jwb_endTime = qs('p_jwb_endTime');
+  els.p_jwb_location = qs('p_jwb_location');
+  els.p_jwb_status = qs('p_jwb_status');
+  els.p_jwb_id = qs('p_jwb_id');
   els.closeParserModal = qs('closeParserModal');
   els._editingParserId = null;
   // servers UI
@@ -96,6 +103,46 @@ async function init(){
   els._editingServerId = null;
   els._serversCache = null;
   els._pendingGoogleConfig = null;
+  // task modal elements (previously not mapped, caused add task click no-op)
+  els.taskModal = qs('taskModal');
+  els.taskModalTitle = qs('taskModalTitle');
+  els.taskForm = qs('taskForm');
+  els.task_name = qs('task_name');
+  els.task_calendarName = qs('task_calendarName');
+  els.task_enabled = qs('task_enabled');
+  els.task_interval = qs('task_interval');
+  els.task_useInterval = qs('task_useInterval');
+  els.task_useTimes = qs('task_useTimes');
+  els.task_times_list = qs('task_times_list');
+  els.task_time_input = qs('task_time_input');
+  els.task_time_add = qs('task_time_add');
+  els.schedule_times_wrap = qs('schedule_times_wrap');
+  els.task_visitTrigger = qs('task_visitTrigger');
+  els.visit_patterns_wrap = qs('visit_patterns_wrap');
+  els.task_visitPatterns = qs('task_visitPatterns');
+  els.task_mode = qs('task_mode');
+  els.task_url = qs('task_url');
+  els.task_warmupUrl = qs('task_warmupUrl');
+  els.task_warmupSilent = qs('task_warmupSilent');
+  els.task_warmupWaitMs = qs('task_warmupWaitMs');
+  els.task_jsonPaths_wrap = qs('task_jsonPaths_wrap');
+  els.task_jsonPaths = qs('task_jsonPaths');
+  els.task_parserId = qs('task_parserId');
+  els.task_serverId = qs('task_serverId');
+  els.task_jwb_windowDays = qs('task_jwb_windowDays');
+  els.task_jwb_coverage = qs('task_jwb_coverage');
+  els.taskRunOnce = qs('taskRunOnce');
+  els.closeTaskModal = qs('closeTaskModal');
+  // logs & permissions elements (ensure event bindings work)
+  els.logsContainer = qs('logs-container');
+  els.logLimit = qs('log-limit');
+  els.refreshLogs = qs('btn-refresh-logs');
+  els.clearLogs = qs('btn-clear-logs');
+  els.logTypeFilter = qs('log-type-filter');
+  els.logModeFilter = qs('log-mode-filter');
+  els.logTaskFilter = qs('log-task-filter');
+  els.btnAuthorizeAll = qs('btnAuthorizeAll');
+  els.btnAuthorizeMissing = qs('btnAuthorizeMissing');
   els.pageParseJsonModeRadios?.forEach(r => r.addEventListener('change', ()=>{}));
   // multi task events
   els.addPageTask?.addEventListener('click', ()=> openTaskModal());
@@ -114,6 +161,9 @@ async function init(){
   els.closeTaskModal?.addEventListener('click', closeTaskModal);
   els.taskForm?.addEventListener('submit', submitTaskForm);
   els.task_mode?.addEventListener('change', updateTaskModalVisibility);
+  // JWB panel dynamic inputs
+  els.task_jwb_windowDays = qs('task_jwb_windowDays');
+  els.task_jwb_coverage = qs('task_jwb_coverage');
   els.task_useTimes?.addEventListener('change', updateScheduleModeVisibility);
   els.task_visitTrigger?.addEventListener('change', updateVisitPatternsVisibility);
   els.task_time_add?.addEventListener('click', addTimePoint);
@@ -156,8 +206,53 @@ function updateJsonPanelVisibility(){
 }
 
 function updateTaskModalVisibility(){
-  // JSON 路径现在在两种模式都可用：direct 提取 或 LLM 预裁剪，不再隐藏
-  if(els.task_jsonPaths_wrap){ els.task_jsonPaths_wrap.style.display = 'block'; }
+  const mode = els.task_mode?.value || 'HTTP_GET_JSON';
+  const panelHttp = document.getElementById('modePanel_HTTP_GET_JSON');
+  const panelJwb = document.getElementById('modePanel_SJTU_JWB');
+  if(panelHttp) panelHttp.style.display = mode === 'HTTP_GET_JSON' ? 'flex':'none';
+  if(panelJwb) panelJwb.style.display = mode === 'SJTU_JWB' ? 'flex':'none';
+  if(els.task_jsonPaths_wrap){
+    // 交我办模式不需要 URL/路径裁剪；隐藏 JSON 路径
+    els.task_jsonPaths_wrap.style.display = (mode === 'HTTP_GET_JSON') ? 'block':'none';
+  }
+  // 当切换到 JWB 模式时，如果没有现成的 jiaowoban 解析节点则自动创建并选中
+  if(mode === 'SJTU_JWB'){
+    ensureJwbParserExistsAndSelect();
+  }
+  // 动态 required：避免浏览器原生校验阻止提交
+  if(els.task_url){
+    if(mode === 'HTTP_GET_JSON'){
+      els.task_url.setAttribute('required','required');
+      els.task_url.disabled = false;
+    } else {
+      els.task_url.removeAttribute('required');
+      // 可选：禁用避免用户误填
+      els.task_url.disabled = true;
+    }
+  }
+}
+
+async function ensureJwbParserExistsAndSelect(){
+  try {
+    // 读取缓存的解析器或重新加载
+    let parsers = els._parsersCache;
+    if(!Array.isArray(parsers)){
+      const r = await chrome.runtime.sendMessage({ type:'GET_PARSERS' });
+      parsers = r?.parsers||[];
+      els._parsersCache = parsers;
+    }
+    let jwb = parsers.find(p=> p.type === 'jiaowoban');
+    if(!jwb){
+      // 创建一个默认交我办解析节点（无需额外配置）
+      const newParser = { id: 'parser-jwb-default', name: '交我办解析', type: 'jiaowoban', config: { fieldMap: { title:['title'], startTime:['startTime'], endTime:['endTime'], location:['location'], status:['status'], id:['eventId','id'] } } };
+      const saveResp = await chrome.runtime.sendMessage({ type:'SAVE_PARSERS', parsers: [...parsers, newParser] });
+      if(saveResp?.parsers) { parsers = saveResp.parsers; els._parsersCache = parsers; }
+      jwb = parsers.find(p=> p.type === 'jiaowoban');
+      // 重新渲染解析节点列表和下拉
+      await loadRenderParsers();
+    }
+    if(jwb && els.task_parserId){ els.task_parserId.value = jwb.id; }
+  } catch(e){ console.warn('自动创建/选择交我办解析节点失败', e); }
 }
 
 function updateScheduleModeVisibility(){
@@ -195,7 +290,20 @@ async function loadRenderTasks(){
   try {
     const resp = await chrome.runtime.sendMessage({ type:'GET_PAGE_TASKS' });
     if(!resp?.ok) throw new Error(resp.error||'获取任务失败');
-    renderTasks(resp.tasks||[]);
+    const tasks = resp.tasks||[];
+    // merge stats
+    try {
+      const s = await loadSettings();
+      const stats = Array.isArray(s.pageTaskStats)? s.pageTaskStats : [];
+      const lastStats = Array.isArray(s.pageTaskLastStats)? s.pageTaskLastStats : [];
+      tasks.forEach(t=>{
+        const st = stats.find(x=> x.id === t.id);
+        if(st){ t._lastAdded = st.added; t._lastTotal = st.total; t._lastTs = st.ts; }
+        const ls = lastStats.find(x=> x.id === t.id);
+        if(ls){ t._lastDetail = ls; }
+      });
+    } catch(_){ /* ignore stats retrieval errors */ }
+    renderTasks(tasks);
   } catch(e){
     console.error('加载任务失败', e);
   }
@@ -215,9 +323,21 @@ function renderTasks(tasks){
     li.style.display='flex';
     li.style.flexDirection='column';
     li.style.gap='6px';
+    const lastAdded = t._lastAdded != null ? t._lastAdded : (t.lastAdded!=null? t.lastAdded: null);
+    const lastTotal = t._lastTotal != null ? t._lastTotal : (t.lastTotal!=null? t.lastTotal: null);
+    let statsLine = '';
+    if(t._lastDetail){
+      const d = t._lastDetail;
+      const when = new Date(d.ts).toLocaleString();
+      statsLine = `<div style="font-size:11px;color:#555">上次(${when}): 获取(${d.fetched||0})/新增(${d.inserted||0})/更新(${d.updated||0})/删(${d.deleted||0})/跳过(${d.skipped||0})${d.coverage? ' [覆盖]':''}</div>`;
+    } else if(lastAdded!=null || lastTotal!=null){
+      statsLine = `<div style="font-size:11px;color:#666">最近: +${lastAdded||0}${lastTotal!=null? ' (总'+lastTotal+')':''}</div>`;
+    }
+    const modeBadge = t.mode==='SJTU_JWB' ? '<span style="background:#fde68a;color:#92400e;padding:2px 6px;border-radius:6px;font-size:11px">交我办</span>' : '';
+    const coverageFlag = (t.mode==='SJTU_JWB' && t.modeConfig?.coverage) ? '<span style="background:#fee2e2;color:#b91c1c;padding:2px 6px;border-radius:6px;font-size:11px">覆盖</span>' : '';
     li.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:600">
-        <span title="${escapeHtml(t.modeConfig?.url||'')}">${escapeHtml(t.name||'未命名')}</span>
+        <span title="${escapeHtml(t.modeConfig?.url||'')}">${escapeHtml(t.name||'未命名')} ${modeBadge} ${coverageFlag}</span>
         <span style="font-size:11px;font-weight:500;color:${t.enabled?'#0b6':'#999'}">${t.enabled?'启用':'停用'}</span>
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:#555">
@@ -226,6 +346,7 @@ function renderTasks(tasks){
         ${t.visitTrigger ? `<span>访问触发</span>`:''}
         ${t.modeConfig?.warmupUrl ? `<span>预热</span>`:''}
       </div>
+      ${statsLine}
       <div style="display:flex;gap:8px">
         <button data-act="run" style="flex:1;background:#0b74de;color:#fff;border:none;padding:6px 0;border-radius:6px;font-size:12px;cursor:pointer">运行</button>
         <button data-act="edit" style="flex:1;background:#fff;border:1px solid #c5d3e2;padding:6px 0;border-radius:6px;font-size:12px;cursor:pointer">编辑</button>
@@ -253,6 +374,9 @@ function openTaskModal(task){
   els.task_enabled.value = task?.enabled? 'true':'false';
   els.task_url.value = task?.modeConfig?.url || task?.url || '';
   els.task_mode.value = 'HTTP_GET_JSON';
+  if(task?.mode === 'SJTU_JWB'){ els.task_mode.value = 'SJTU_JWB'; }
+  if(els.task_jwb_windowDays) els.task_jwb_windowDays.value = task?.mode==='SJTU_JWB'? (task.modeConfig?.windowDays || 14):14;
+  if(els.task_jwb_coverage) els.task_jwb_coverage.checked = task?.mode==='SJTU_JWB' ? !!task.modeConfig?.coverage : false;
   if(els.task_warmupUrl) els.task_warmupUrl.value = task?.modeConfig?.warmupUrl || '';
   if(els.task_warmupSilent) els.task_warmupSilent.checked = task?.modeConfig?.warmupSilent !== false; // default true
   if(els.task_warmupWaitMs) els.task_warmupWaitMs.value = (task?.modeConfig?.warmupWaitMs ?? '');
@@ -260,7 +384,14 @@ function openTaskModal(task){
   // parser selection
   els.task_parserId.value = task?.modeConfig?.parserId || '';
   // server selection
-  els.task_serverId.value = task?.serverId || '';
+  if(task?.serverId){
+    els.task_serverId.value = task.serverId;
+  } else if(!task && els._settings?.selectedServerId && els.task_serverId){
+    // 新增任务时自动选默认服务器
+    els.task_serverId.value = els._settings.selectedServerId;
+  } else {
+    els.task_serverId.value = task?.serverId || '';
+  }
   // multi-trigger checkboxes
   if(els.task_useInterval) els.task_useInterval.checked = (task?.useInterval === true) || (!('useInterval' in (task||{})) && (task?.scheduleType !== 'times'));
   if(els.task_useTimes) els.task_useTimes.checked = !!task?.useTimes || (task?.scheduleType === 'times');
@@ -286,6 +417,19 @@ async function submitTaskForm(ev){
   const useTimes = !!els.task_useTimes?.checked;
   const visitTrigger = !!els.task_visitTrigger?.checked;
   const visitPatterns = (els.task_visitPatterns?.value || '').split(/\n+/).map(s=>s.trim()).filter(Boolean);
+  const modeVal = els.task_mode.value;
+  const panelJwb = document.getElementById('modePanel_SJTU_JWB');
+  const jwbVisible = !!panelJwb && panelJwb.style.display !== 'none';
+  // HTTP_GET_JSON 模式才校验 URL；若选择了交我办（面板可见或值是 SJTU_JWB）则不要求 URL
+  if(modeVal === 'HTTP_GET_JSON' && !jwbVisible){
+    const urlVal = (els.task_url.value||'').trim();
+    if(!urlVal){
+      alert('请填写目标 URL（HTTP_GET_JSON 模式）');
+      els.task_url.focus();
+      return;
+    }
+  }
+  console.log('[options] submitTaskForm mode=%s jwbVisible=%s', modeVal, jwbVisible);
   const data = {
     id: els._editingTaskId || ('task-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6)),
     name: els.task_name.value.trim()||'Untitled',
@@ -299,22 +443,27 @@ async function submitTaskForm(ev){
   visitTrigger,
   visitPatterns,
     mode: els.task_mode.value,
-    modeConfig: {
+    modeConfig: (els.task_mode.value === 'SJTU_JWB') ? {
+      windowDays: Math.max(1, Math.min(90, Number(els.task_jwb_windowDays?.value)||14)),
+      coverage: !!els.task_jwb_coverage?.checked,
+    } : {
       url: els.task_url.value.trim(),
       warmupUrl: (els.task_warmupUrl?.value||'').trim() || undefined,
       warmupSilent: !!els.task_warmupSilent?.checked,
       warmupWaitMs: (function(){ const n = Number(els.task_warmupWaitMs?.value); return Number.isFinite(n)&&n>0 ? Math.floor(n): undefined; })(),
       jsonPaths: els.task_jsonPaths.value.trim(),
       parserId: (els.task_parserId?.value || '').trim() || undefined,
-  // parseMode removed: behavior is determined by selected parser or fallback
     },
     serverId: (els.task_serverId?.value || '').trim() || undefined,
   };
   if(!useTimes) delete data.times; if(!useInterval) delete data.intervalMinutes;
   const newTasks = els._editingTaskId ? tasks.map(t=> t.id===data.id? data: t) : [...tasks, data];
   await saveTasks(newTasks);
+  console.log('[options] Saved tasks', newTasks);
   closeTaskModal();
-  renderTasks(newTasks);
+  // 重新从后台载入，避免前端与 sanitize 结果不一致导致误判“未保存”
+  await loadRenderTasks();
+  alert('任务已保存');
 }
 
 async function runTask(id, btn){
@@ -397,6 +546,17 @@ async function runPageParseNow(){
 
 document.addEventListener('DOMContentLoaded', init);
 
+// Auto-refresh when background announces task completion
+try {
+  chrome.runtime.onMessage.addListener((msg)=>{
+    if(msg && msg.type === 'TASK_RUN_COMPLETED'){
+      // Refresh logs and tasks panel silently
+      refreshLogs().catch(()=>{});
+      loadRenderTasks().catch(()=>{});
+    }
+  });
+} catch(_){ /* ignore */ }
+
 // ---------------- Logs Panel ----------------
 async function fetchLogs(limit){
   const n = Math.max(1, Math.min(Number(limit)||200, 1000));
@@ -405,25 +565,60 @@ async function fetchLogs(limit){
   return r.logs||[];
 }
 
+function _filterLogs(all){
+  if(!Array.isArray(all)) return [];
+  const typeVal = els.logTypeFilter?.value || 'all';
+  const modeVal = els.logModeFilter?.value || 'all';
+  const key = (els.logTaskFilter?.value||'').trim().toLowerCase();
+  return all.filter(it => {
+    if(typeVal !== 'all'){
+      if(typeVal === 'trigger' && it.type !== 'trigger') return false;
+      if(typeVal === 'result_ok' && !(it.type==='result' && it.ok)) return false;
+      if(typeVal === 'result_fail' && !(it.type==='result' && it.ok === false)) return false;
+      if(typeVal === 'coverage' && !(it.type==='result' && it.coverage)) return false;
+    }
+    if(modeVal !== 'all'){
+      if(it.type !== 'result') return false;
+      if((it.mode||'') !== modeVal) return false;
+    }
+    if(key){
+      const n = (it.taskName||it.taskId||'').toLowerCase();
+      if(!n.includes(key)) return false;
+    }
+    return true;
+  });
+}
+
 function renderLogs(logs){
   if(!els.logsContainer) return;
-  if(!Array.isArray(logs) || !logs.length){ els.logsContainer.innerHTML = '<div style="color:#666">暂无日志</div>'; return; }
+  const list = Array.isArray(logs)? logs: [];
+  const filtered = _filterLogs(list);
+  if(!filtered.length){ els.logsContainer.innerHTML = '<div style="color:#666">暂无匹配日志</div>'; return; }
   const fmt = (ts)=> new Date(ts).toLocaleString();
   const esc = (s)=> (s==null?'':String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;' }[c])));
-  const rows = logs.map((it)=>{
+  const rows = filtered.map((it)=>{
     const base = `[${fmt(it.ts)}] [${it.type}] [${it.triggerType||'-'}] [${esc(it.taskName||it.taskId||'-')}]`;
     if(it.type === 'trigger'){
       return `<div>[${fmt(it.ts)}] ▶ 任务触发(${esc(it.triggerType)}) - ${esc(it.taskName||it.taskId)} ${it.info? `<span style="color:#444">${esc(JSON.stringify(it.info))}</span>`:''}</div>`;
     } else if(it.type === 'result'){
       const ok = it.ok === true;
       const color = ok ? '#0b6' : '#c24d4d';
-      const tail = ok ? `成功 +${it.added||0} (总${it.total||0}) mode=${esc(it.mode||'-')}` : `失败 ${esc(it.error||'')}`;
-      return `<div>[${fmt(it.ts)}] ${ok? '✔':'✖'} <span style="color:${color}">${tail}</span> - ${esc(it.taskName||it.taskId)} <span style="color:#666">${(it.durationMs||0)}ms</span></div>`;
+      if(ok){
+        const fetched = it.sourceCount || it.added || (it.inserted||0)+(it.skipped||0)+(it.updated||0)+(it.deleted||0);
+  const tail = `成功：获取(${fetched})/新增(${it.inserted||it.added||0})/更新(${it.updated||0})/删除(${it.deleted||0})/跳过(${it.skipped||0}) mode=${esc(it.mode||'-')}${it.coverage?' [覆盖]':''}`;
+        return `<div>[${fmt(it.ts)}] ✔ <span style="color:${color}">${tail}</span> - ${esc(it.taskName||it.taskId)} <span style="color:#666">${(it.durationMs||0)}ms</span></div>`;
+      } else {
+        const tail = `失败 ${esc(it.error||'')}`;
+        return `<div>[${fmt(it.ts)}] ✖ <span style="color:${color}">${tail}</span> - ${esc(it.taskName||it.taskId)} <span style="color:#666">${(it.durationMs||0)}ms</span></div>`;
+      }
     }
     return `<div>${esc(base)}</div>`;
   });
   els.logsContainer.innerHTML = rows.join('');
 }
+  els.logTypeFilter?.addEventListener('change', refreshLogs);
+  els.logModeFilter?.addEventListener('change', refreshLogs);
+  els.logTaskFilter?.addEventListener('input', ()=> { clearTimeout(els._logFilterTimer); els._logFilterTimer = setTimeout(()=> refreshLogs(), 250); });
 
 async function refreshLogs(){
   try{
@@ -547,6 +742,22 @@ function openParserModal(parser, all){
   els.parserModalTitle.textContent = parser? '编辑解析节点':'新增解析节点';
   els.parser_name.value = parser?.name || '';
   els.parser_type.value = parser?.type || 'zhipu_agent';
+  if(els.parser_type.value === 'jiaowoban'){
+    const fm = parser?.config?.fieldMap || {};
+    els.p_jwb_title && (els.p_jwb_title.value = (Array.isArray(fm.title)? fm.title : []).join(','));
+    els.p_jwb_startTime && (els.p_jwb_startTime.value = (Array.isArray(fm.startTime)? fm.startTime : []).join(','));
+    els.p_jwb_endTime && (els.p_jwb_endTime.value = (Array.isArray(fm.endTime)? fm.endTime : []).join(','));
+    els.p_jwb_location && (els.p_jwb_location.value = (Array.isArray(fm.location)? fm.location : []).join(','));
+    els.p_jwb_status && (els.p_jwb_status.value = (Array.isArray(fm.status)? fm.status : []).join(','));
+    els.p_jwb_id && (els.p_jwb_id.value = (Array.isArray(fm.id)? fm.id : []).join(','));
+  } else {
+    if(els.p_jwb_title) els.p_jwb_title.value='';
+    if(els.p_jwb_startTime) els.p_jwb_startTime.value='';
+    if(els.p_jwb_endTime) els.p_jwb_endTime.value='';
+    if(els.p_jwb_location) els.p_jwb_location.value='';
+    if(els.p_jwb_status) els.p_jwb_status.value='';
+    if(els.p_jwb_id) els.p_jwb_id.value='';
+  }
   // fill type fields
   if(els.parser_type.value === 'zhipu_agent'){
     const c = parser?.config || {};
@@ -616,6 +827,15 @@ async function submitParserForm(ev){
       uid: (els.p_json_def_uid.value||'').trim() || undefined,
       description: (els.p_json_def_description.value||'').trim() || undefined,
     } };
+  } else if(type === 'jiaowoban'){
+    const map = {};
+    if(els.p_jwb_title?.value.trim()) map.title = els.p_jwb_title.value.split(',').map(s=>s.trim()).filter(Boolean);
+    if(els.p_jwb_startTime?.value.trim()) map.startTime = els.p_jwb_startTime.value.split(',').map(s=>s.trim()).filter(Boolean);
+    if(els.p_jwb_endTime?.value.trim()) map.endTime = els.p_jwb_endTime.value.split(',').map(s=>s.trim()).filter(Boolean);
+    if(els.p_jwb_location?.value.trim()) map.location = els.p_jwb_location.value.split(',').map(s=>s.trim()).filter(Boolean);
+    if(els.p_jwb_status?.value.trim()) map.status = els.p_jwb_status.value.split(',').map(s=>s.trim()).filter(Boolean);
+    if(els.p_jwb_id?.value.trim()) map.id = els.p_jwb_id.value.split(',').map(s=>s.trim()).filter(Boolean);
+    if(Object.keys(map).length) cfg = { fieldMap: map };
   }
   try {
     const list = els._parsersCache || await loadParsers();
@@ -640,6 +860,7 @@ function onParserTypeChange(){
   if(t === 'zhipu_agent') showParserPanel('zhipu');
   else if(t === 'chatgpt_agent') showParserPanel('chatgpt');
   else if(t === 'bailian_agent') showParserPanel('bailian');
+  else if(t === 'jiaowoban') showParserPanel('jiaowoban');
   else showParserPanel('json');
 }
 
@@ -648,10 +869,12 @@ function showParserPanel(kind){
   const b = document.getElementById('parser_panel_jsonmap');
   const d = document.getElementById('parser_panel_chatgpt');
   const e = document.getElementById('parser_panel_bailian');
+  const f = document.getElementById('parser_panel_jiaowoban');
   if(a) a.style.display = kind==='zhipu' ? 'flex' : 'none';
   if(b) b.style.display = kind==='json' ? 'flex' : 'none';
   if(d) d.style.display = kind==='chatgpt' ? 'flex' : 'none';
   if(e) e.style.display = kind==='bailian' ? 'flex' : 'none';
+  if(f) f.style.display = kind==='jiaowoban' ? 'flex' : 'none';
 }
 
 // ---------------- Servers management ----------------
@@ -781,11 +1004,12 @@ function renderServers(servers, defaultServerId){
 
 function populateServerSelects(servers, defaultServerId){
   if(els.task_serverId){
-    const opts = ['<option value="">(默认)</option>'].concat((servers||[]).map(s=> {
+    const opts = (servers||[]).map(s=> {
       const isDefault = defaultServerId && s.id === defaultServerId;
       return `<option value="${s.id}">${escapeHtml(s.name)} (${escapeHtml(s.type)}${isDefault?' · 默认':''})</option>`;
-    })).join('');
+    }).join('');
     els.task_serverId.innerHTML = opts;
+    if(defaultServerId){ els.task_serverId.value = defaultServerId; }
   }
   if(els.defaultServerSelect){
     if(!servers.length){

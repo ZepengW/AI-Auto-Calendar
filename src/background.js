@@ -27,11 +27,13 @@ import { loadServers, saveServers, getServerById, mergeUploadWithServer, authori
 //   times: string[];          // useTimes 时有效，格式 HH:mm
 //   visitTrigger: boolean;    // 访问页面触发
 //   visitPatterns: string[];  // 可选，前缀匹配；为空则默认使用 modeConfig.url
-//   mode: 'HTTP_GET_JSON';    // 数据获取模式（目前仅支持这一种）
+//   mode: 'HTTP_GET_JSON' | 'SJTU_JWB';    // 数据获取模式
 //   modeConfig: {             // 模式配置
-//     url: string;            // 目标 URL (HTTP GET)
+//     url: string;            // (HTTP_GET_JSON) 目标 URL (HTTP GET)
 //     jsonPaths: string;      // 多行 JSON 路径 (同旧版)
 //     parseMode: 'llm'|'direct'; // deprecated from UI; inferred by parserId or legacy data
+//     windowDays?: number;    // (SJTU_JWB) 前后时间窗口天数 (默认 14)
+//     coverage?: boolean;     // (SJTU_JWB) 覆盖模式：若为 true 则删除窗口内未出现在源数据中的已存在事件
 //   };
 // }>
 // 旧版迁移：
@@ -185,8 +187,14 @@ function buildICS(events, calendarName = 'SJTU') {
 
 // Upload ICS to Radicale server
 async function uploadToRadicale(ics, calendarName, settings) {
-  const base = (settings.radicalBase || DEFAULTS.radicalBase).replace(/\/$/, '');
-  const user = settings.radicalUsername || DEFAULTS.radicalUsername;
+  const baseRaw = settings.radicalBase || DEFAULTS.radicalBase;
+  if(!baseRaw){
+    // 没有配置 Radicale，直接跳过（视为无上传目标）
+    notifyAll('未配置 Radicale 服务器，跳过上传: '+ calendarName);
+    return { ok:true, skipped:true };
+  }
+  const base = baseRaw.replace(/\/$/, '');
+  const user = settings.radicalUsername || DEFAULTS.radicalUsername || 'calendar';
   const auth = settings.radicalAuth || '';
   const url = `${base}/${encodeURIComponent(user)}/${encodeURIComponent(calendarName)}.ics`;
   const headers = { 'Content-Type': 'text/calendar; charset=utf-8' };
@@ -315,8 +323,13 @@ function mergeEvents(existing, incoming){
 
 async function mergeUpload(calendarName, newEvents){
   const settings = await loadSettings();
-  const base = (settings.radicalBase || DEFAULTS.radicalBase).replace(/\/$/, '');
-  const user = settings.radicalUsername || DEFAULTS.radicalUsername;
+  const baseRaw = settings.radicalBase || DEFAULTS.radicalBase;
+  if(!baseRaw){
+    notifyAll('未配置 Radicale，合并上传跳过: '+ calendarName);
+    return { total: newEvents.length, added: newEvents.length, skipped:true };
+  }
+  const base = baseRaw.replace(/\/$/, '');
+  const user = settings.radicalUsername || DEFAULTS.radicalUsername || 'calendar';
   const auth = settings.radicalAuth || '';
   const url = `${base}/${encodeURIComponent(user)}/${encodeURIComponent(calendarName)}.ics`;
   const headers = {};
@@ -369,6 +382,15 @@ function notifyAll(text) {
     message: text.substring(0, 180),
   });
   chrome.runtime.sendMessage({ type: 'SJTU_CAL_TOAST', text }).catch(() => {});
+}
+
+function formatStatsNotice(prefix, fetched, result){
+  if(!result) return `${prefix}：获取(${fetched})`;
+  const ins = result.inserted ?? (result.added ?? 0);
+  const upd = result.updated ?? 0;
+  const del = result.deleted ?? 0;
+  const skip = result.skipped ?? 0;
+  return `${prefix}：获取(${fetched})/新增(${ins})/更新(${upd})/删除(${del})/跳过(${skip})` + (result.coverage? ' [覆盖]':'');
 }
 
 // Message handlers
@@ -728,36 +750,54 @@ async function triggerPageTaskById(id, timeIndex, isTimeAlarm){
 }
 
 function sanitizeNewTasks(tasks){
-  // 基础字段约束 & 过滤无 URL
-  return tasks.map(t => ({
-    id: t.id || ('task-'+Math.random().toString(36).slice(2)),
-    name: t.name || '任务',
-    calendarName: t.calendarName || t.name || 'PAGE-PARSED',
-    enabled: !!t.enabled,
-    scheduleType: (t.scheduleType === 'times' ? 'times':'interval'),
-    // 新版触发：多选
-    useInterval: !!t.useInterval,
-    intervalMinutes: Math.max(1, Number(t.intervalMinutes)|| (Number(t.interval)||60) ),
-    useTimes: !!t.useTimes,
-    times: Array.isArray(t.times)? t.times.filter(x=>/^\d{2}:\d{2}$/.test(x)) : [],
-    visitTrigger: !!t.visitTrigger,
-    visitPatterns: Array.isArray(t.visitPatterns) ? t.visitPatterns.filter(s=> typeof s === 'string' && s.trim()).map(s=>s.trim()) : [],
-    mode: 'HTTP_GET_JSON',
-    modeConfig: {
-      url: t.modeConfig?.url || t.url || '',
-      warmupUrl: t.modeConfig?.warmupUrl || t.warmupUrl || undefined,
-      warmupSilent: (t.modeConfig?.warmupSilent !== false),
-      warmupWaitMs: (Number(t.modeConfig?.warmupWaitMs)||undefined),
-      jsonPaths: t.modeConfig?.jsonPaths || t.jsonPaths || 'data.events[*]',
-      parserId: t.modeConfig?.parserId || t.parserId || undefined,
-  // parseMode no longer set by UI; keep legacy compatibility if present
-  parseMode: (t.modeConfig?.parseMode || (t.jsonMode==='json'?'direct':'llm') || 'llm') === 'direct' ? 'direct':'llm',
-    },
-    serverId: t.serverId || undefined,
-  })).filter(t => t.modeConfig.url);
+  // 基础字段约束 & 过滤无 URL (除 SJTU_JWB )
+  return tasks.map(t => {
+    const common = {
+      id: t.id || ('task-'+Math.random().toString(36).slice(2)),
+      name: t.name || '任务',
+      calendarName: t.calendarName || t.name || 'PAGE-PARSED',
+      enabled: !!t.enabled,
+      scheduleType: (t.scheduleType === 'times' ? 'times':'interval'),
+      useInterval: !!t.useInterval,
+      intervalMinutes: Math.max(1, Number(t.intervalMinutes)|| (Number(t.interval)||60) ),
+      useTimes: !!t.useTimes,
+      times: Array.isArray(t.times)? t.times.filter(x=>/^\d{2}:\d{2}$/.test(x)) : [],
+      visitTrigger: !!t.visitTrigger,
+      visitPatterns: Array.isArray(t.visitPatterns) ? t.visitPatterns.filter(s=> typeof s === 'string' && s.trim()).map(s=>s.trim()) : [],
+      serverId: t.serverId || undefined,
+    };
+    if(t.mode === 'SJTU_JWB'){
+      return {
+        ...common,
+        mode: 'SJTU_JWB',
+        modeConfig: {
+          windowDays: Math.max(1, Math.min(90, Number(t.modeConfig?.windowDays)||Number(t.windowDays)||14)),
+          coverage: !!(t.modeConfig?.coverage || t.coverage),
+        }
+      };
+    }
+    return {
+      ...common,
+      mode: 'HTTP_GET_JSON',
+      modeConfig: {
+        url: t.modeConfig?.url || t.url || '',
+        warmupUrl: t.modeConfig?.warmupUrl || t.warmupUrl || undefined,
+        warmupSilent: (t.modeConfig?.warmupSilent !== false),
+        warmupWaitMs: (Number(t.modeConfig?.warmupWaitMs)||undefined),
+        jsonPaths: t.modeConfig?.jsonPaths || t.jsonPaths || 'data.events[*]',
+        parserId: t.modeConfig?.parserId || t.parserId || undefined,
+        parseMode: (t.modeConfig?.parseMode || (t.jsonMode==='json'?'direct':'llm') || 'llm') === 'direct' ? 'direct':'llm',
+      }
+    };
+  }).filter(t => t.mode === 'SJTU_JWB' ? true : t.modeConfig.url);
 }
 
 async function runSinglePageTask(task){
+  if(task.mode === 'SJTU_JWB'){
+    const r = await runJwbTask(task);
+    await recordTaskStats(task.id, r.added, r.total);
+    return r;
+  }
   if(task.mode !== 'HTTP_GET_JSON') throw new Error('不支持的模式');
   const { calendarName, modeConfig } = task;
   const url = modeConfig.url;
@@ -791,7 +831,7 @@ async function runSinglePageTask(task){
     } catch { text=''; }
     const eventsParsed = await parseWithParser(text, parser, { jsonPaths: modeConfig.jsonPaths });
     const { total } = await uploadWithSelectedServer(eventsParsed || [], calendarName, task.serverId);
-    notifyAll(`任务 ${calendarName} (parser:${parser.name||parser.type}) 完成: +${(eventsParsed||[]).length} (总${total})`);
+  notifyAll(formatStatsNotice(`任务 ${calendarName} (parser:${parser.name||parser.type}) 完成`, (eventsParsed||[]).length, { total }));
     return { added: (eventsParsed||[]).length, total, direct: parser.type === 'json_mapping' };
   }
   // No explicit parser: choose fetch by parseMode
@@ -806,7 +846,7 @@ async function runSinglePageTask(task){
     const events = await tryParseJsonEvents(text, pseudoSettings) || [];
     if(events.length){
       const info = await mergeUpload(calendarName || 'PAGE-PARSED', events);
-      notifyAll(`任务 ${calendarName} (direct) 完成: +${events.length} (总${info.total})`);
+  notifyAll(formatStatsNotice(`任务 ${calendarName} (direct) 完成`, events.length, info));
       return { added: events.length, total: info.total, direct:true };
     }
     // direct 失败则尝试 LLM 兜底
@@ -819,9 +859,64 @@ async function runSinglePageTask(task){
   }
   const eventsLLM = await parseTextViaLLM(llmInput);
   const { total: total2 } = await uploadWithSelectedServer(eventsLLM, calendarName, task.serverId);
-  notifyAll(`任务 ${calendarName} 完成: +${eventsLLM.length} (总${total2})`);
+  notifyAll(formatStatsNotice(`任务 ${calendarName} 完成`, eventsLLM.length, { total: total2, inserted: eventsLLM.length }));
+  await recordTaskStats(task.id, eventsLLM.length, total2);
   return { added: eventsLLM.length, total: total2 };
 }
+
+async function runJwbTask(task){
+  const { calendarName } = task;
+  const days = Math.max(1, Number(task.modeConfig?.windowDays)||14);
+  // warmup visit to calendar UI first (silent) to refresh cookies
+  try { await warmupVisit('https://my.sjtu.edu.cn/ui/calendar/', { silent:true, waitMs: 1500 }); } catch(_){ /* ignore */ }
+  const now = new Date();
+  const start = new Date(now); start.setDate(now.getDate() - days);
+  const end = new Date(now); end.setDate(now.getDate() + days);
+  const url = `https://calendar.sjtu.edu.cn/api/event/list?startDate=${formatDateForAPI(start)}&endDate=${formatDateForAPI(end)}&weekly=false&ids=`;
+  await ensureHostPermissionForUrl(url);
+  const resp = await httpFetch(url);
+  if(!resp.ok) throw new Error('交我办事件获取失败 ' + resp.status);
+  // Ensure jiaowoban parser exists (auto-create if missing)
+  const parser = await ensureJiaowobanParser();
+  // Pass full JSON text to parser for consistent architecture
+  let eventsPayload;
+  try {
+    eventsPayload = await parseWithParser(resp.text, parser, { calendarName });
+  } catch(e){
+    throw new Error('交我办解析节点处理失败: ' + e.message);
+  }
+  const events = eventsPayload.events || [];
+  if(!events.length) notifyAll(`交我办窗口 ${days} 天内无事件 (${calendarName})`);
+  const coverage = !!task.modeConfig?.coverage;
+  const meta = coverage ? { coverage:true, windowStart: start, windowEnd: end } : {};
+  const result = await uploadWithSelectedServer(events, calendarName, task.serverId, meta);
+  notifyAll(formatStatsNotice(`交我办任务${coverage?'(覆盖)':''} ${calendarName}`, events.length, result));
+  await recordTaskStats(task.id, events.length, result.total);
+  return { added: events.length, total: result.total, jwb:true, coverage: coverage||false, ...result };
+}
+
+async function ensureJiaowobanParser(){
+  const list = await loadParsers();
+  let node = list.find(p=> p.type === 'jiaowoban');
+  if(node) return node;
+  // auto-create with default field map
+  const newNode = { id: 'parser-jwb-'+Math.random().toString(36).slice(2), name: '交我办解析', type: 'jiaowoban', config: { fieldMap:{ title:['title'], startTime:['startTime'], endTime:['endTime'], location:['location'], status:['status'], id:['eventId','id'] } } };
+  const saved = await saveParsers([...list, newNode]);
+  node = saved.find(p=> p.id === newNode.id) || newNode;
+  return node;
+}
+
+async function recordTaskStats(taskId, added, total){
+  try {
+    const s = await loadSettings();
+    const stats = Array.isArray(s.pageTaskStats)? s.pageTaskStats.slice(): [];
+    const idx = stats.findIndex(x=> x.id === taskId);
+    const entry = { id: taskId, ts: Date.now(), added, total };
+    if(idx >= 0) stats[idx] = entry; else stats.push(entry);
+    await saveSettings({ pageTaskStats: stats });
+  } catch(e){ /* ignore stat persist errors */ }
+}
+
 
 // Warmup visit: open a tab (inactive by default), wait for load complete or timeout, optional extra wait, then close
 async function warmupVisit(warmUrl, opts){
@@ -855,11 +950,11 @@ async function uploadWithSelectedServer(events, calendarName, serverId, meta = {
       // Prefer explicit calendarName; if absent, use server defaultCalendarName; fallback to PAGE-PARSED
       const targetName = (calendarName && calendarName.trim()) || server.config?.defaultCalendarName || 'PAGE-PARSED';
       const r = await mergeUploadWithServer(events, targetName, server, meta);
-      return { total: r.total };
+      return { ...r };
     }
   }
   const info = await mergeUpload(calendarName || 'PAGE-PARSED', events);
-  return { total: info.total };
+  return { ...info };
 }
 
 // -----------------------------
@@ -1129,11 +1224,41 @@ async function runTaskWithLogging(task, triggerType, info){
   try {
     const result = await runSinglePageTask(task);
     const done = Date.now();
-    await appendTaskLog({ ts: done, type: 'result', triggerType, taskId: task.id, taskName: task.name || task.calendarName || task.id, durationMs: done-start, ok: true, added: result.added||0, total: result.total||0, mode: result.direct ? 'direct':'llm' });
+    const modeLabel = task.mode === 'SJTU_JWB' ? 'jwb' : (result.direct ? 'direct' : 'llm');
+    await appendTaskLog({
+      ts: done,
+      type: 'result',
+      triggerType,
+      taskId: task.id,
+      taskName: task.name || task.calendarName || task.id,
+      durationMs: done-start,
+      ok: true,
+      added: result.added||0,
+      total: result.total||0,
+      mode: modeLabel,
+      inserted: result.inserted||0,
+      updated: result.updated||0,
+      deleted: result.deleted||0,
+      skipped: result.skipped||0,
+      coverage: !!result.coverage,
+      sourceCount: result.added || 0
+    });
+    // Persist last detailed stats for task card display
+    try {
+      const s = await loadSettings();
+      const lastStats = Array.isArray(s.pageTaskLastStats)? s.pageTaskLastStats.slice(): [];
+      const idx = lastStats.findIndex(x=> x.id === task.id);
+      const entry = { id: task.id, ts: done, fetched: result.added||0, inserted: result.inserted||0, updated: result.updated||0, deleted: result.deleted||0, skipped: result.skipped||0, coverage: !!result.coverage };
+      if(idx>=0) lastStats[idx] = entry; else lastStats.push(entry);
+      await saveSettings({ pageTaskLastStats: lastStats });
+    } catch(_){ /* ignore persist errors */ }
+    // Broadcast completion so options page refreshes tasks + logs
+    try { chrome.runtime.sendMessage({ type:'TASK_RUN_COMPLETED', taskId: task.id }).catch(()=>{}); } catch(_){ }
     return result;
   } catch(e){
     const done = Date.now();
     await appendTaskLog({ ts: done, type: 'result', triggerType, taskId: task.id, taskName: task.name || task.calendarName || task.id, durationMs: done-start, ok: false, error: e.message });
+    try { chrome.runtime.sendMessage({ type:'TASK_RUN_COMPLETED', taskId: task.id, error: e.message }).catch(()=>{}); } catch(_){ }
     throw e;
   }
 }
