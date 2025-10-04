@@ -1080,15 +1080,10 @@ async function ensureGoogleAccessToken(serverId, { clientId, clientSecret, scope
     const saved = await updateServerConfig(serverId, { token: { access_token: tok, token_type:'Bearer', expires_at, source:'identity' }, oauthMode: 'identity' });
     return saved?.config?.token || { access_token: tok, token_type:'Bearer', expires_at, source:'identity' };
   }
+  // Prefer PKCE (refresh token) by default; implicit only as explicit fallback
   let mode = cfg.oauthMode;
   if(!mode){
-    if(cfg.token?.refresh_token){
-      mode = 'pkce';
-    } else if(clientSecret){
-      mode = 'pkce';
-    } else {
-      mode = 'implicit';
-    }
+    mode = 'pkce';
   }
   if(mode === 'implicit'){
     const implicit = await getAccessTokenViaImplicit({ clientId, scopes: (scopes||[]) });
@@ -1146,8 +1141,9 @@ async function ensureGoogleAccessToken(serverId, { clientId, clientSecret, scope
     try { const t = await tokenRes.text(); detail = t?.slice(0,300) || ''; } catch(_){ }
     // If server insists on client_secret (confidential client), try implicit flow (no refresh_token)
     if(tokenRes.status === 400 && /client[_-]?secret|secret key|missing\s+secret/i.test(detail || '')){
+      // Could not complete PKCE due to secret requirement; fallback to implicit
       await updateServerConfig(serverId, { oauthMode: 'implicit' });
-      throw new Error('当前 Client ID 需要 Client Secret，已切换为隐式授权模式，请重新点击一次“授权”。');
+      throw new Error('当前 Client ID 需要 Client Secret，已切换为隐式模式，请重新点一次“授权”。（若需长期免登录，请使用支持无密 PKCE 的 OAuth 客户端）');
     }
     throw new Error('令牌交换失败: '+ tokenRes.status + (detail? (' '+detail):''));
   }
