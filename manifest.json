@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "AI Auto Calendar",
   "description": "一体化的非结构化信息抓取-解析-同步日历插件：支持通过 HTTP 自动获取日程、调用大模型或 JSON 映射进行结构化解析，并将事件同步到多种日历服务器（如 Radicale、Google 日历）。",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "icons": {"16":"icons/icon.png","48":"icons/icon.png","128":"icons/icon.png"},
   "permissions": [
     "storage",

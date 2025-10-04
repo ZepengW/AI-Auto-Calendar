@@ -153,13 +153,35 @@ function buildICS(events, calendarName = 'Calendar'){
     'X-WR-TIMEZONE:UTC',
   ];
   for(const ev of events){
-    try{
+    try {
       if(!ev.startTime || !ev.endTime || !ev.title) continue;
       const raw = typeof ev.rawICS === 'string' ? ev.rawICS.trim() : '';
-      if (raw && raw.toUpperCase().includes('BEGIN:VEVENT')) {
-        const blockLines = raw.replace(/\r?\n/g, '\r\n').split(/\r?\n/);
-        lines.push(...blockLines);
-        continue;
+      if(raw && raw.toUpperCase().includes('BEGIN:VEVENT')){
+        if(/BEGIN:VALARM/i.test(raw) || !Array.isArray(ev.alarms) || !ev.alarms.length){
+          const blockLines = raw.replace(/\r?\n/g,'\r\n').split(/\r?\n/);
+          lines.push(...blockLines);
+          continue;
+        } else {
+          // inject alarms before END:VEVENT
+          const srcLines = raw.replace(/\r?\n/g,'\n').split(/\n/);
+            const out = [];
+            for(const l of srcLines){
+              if(l.trim().toUpperCase()==='END:VEVENT'){
+                for(const al of ev.alarms){
+                  const mins = Number(al.minutesBefore);
+                  if(!Number.isFinite(mins) || mins<=0) continue;
+                  out.push('BEGIN:VALARM');
+                  out.push(`TRIGGER:-PT${Math.floor(mins)}M`);
+                  out.push('ACTION:DISPLAY');
+                  out.push(`DESCRIPTION:${escapeICSText(al.description||'Reminder')}`);
+                  out.push('END:VALARM');
+                }
+              }
+              out.push(l);
+            }
+            lines.push(...out);
+            continue;
+        }
       }
       lines.push('BEGIN:VEVENT');
       const uid = ev.uid || ev.eventId || ev.id || 'evt-' + Math.random().toString(36).slice(2);
@@ -167,132 +189,195 @@ function buildICS(events, calendarName = 'Calendar'){
       lines.push(`DTSTAMP:${isoToICSTime(now)}`);
       const sDate = ev.startTime instanceof Date ? ev.startTime : null;
       const eDate = ev.endTime instanceof Date ? ev.endTime : null;
-      if(!sDate || !eDate) { lines.push('END:VEVENT'); continue; }
+      if(!sDate || !eDate){ lines.push('END:VEVENT'); continue; }
       const startIsDate = !!(ev.startTimeIsDate || ev.startIsDate || ev.allDay);
       const endIsDate = !!(ev.endTimeIsDate || ev.endIsDate || ev.allDay);
-      if (startIsDate) {
+      if(startIsDate){
         const dateStr = toIcsDateString(ev.startDateText, sDate);
-        if (dateStr) lines.push(`DTSTART;VALUE=DATE:${dateStr}`);
+        if(dateStr) lines.push(`DTSTART;VALUE=DATE:${dateStr}`);
       } else {
         lines.push(`DTSTART:${isoToICSTime(sDate)}`);
       }
-      if (endIsDate) {
+      if(endIsDate){
         const dateStr = toIcsDateString(ev.endDateText, eDate);
-        if (dateStr) lines.push(`DTEND;VALUE=DATE:${dateStr}`);
+        if(dateStr) lines.push(`DTEND;VALUE=DATE:${dateStr}`);
       } else {
         lines.push(`DTEND:${isoToICSTime(eDate)}`);
       }
       lines.push(`SUMMARY:${escapeICSText(ev.title || ev.summary || '')}`);
-      if (ev.location) lines.push(`LOCATION:${escapeICSText(ev.location)}`);
-      if (ev.status) lines.push(`STATUS:${escapeICSText(ev.status)}`);
-      if (ev.rrule) {
+      if(ev.location) lines.push(`LOCATION:${escapeICSText(ev.location)}`);
+      if(ev.status) lines.push(`STATUS:${escapeICSText(ev.status)}`);
+      if(ev.rrule){
         const clause = String(ev.rrule).trim();
-        if (clause) {
+        if(clause){
           lines.push(clause.toUpperCase().startsWith('RRULE:') ? clause : `RRULE:${clause}`);
         }
       }
-      if (ev.description) lines.push(`DESCRIPTION:${escapeICSText(String(ev.description))}`);
+      if(ev.description) lines.push(`DESCRIPTION:${escapeICSText(String(ev.description))}`);
+      // Inject VALARM blocks if alarms present (and not already handled above by rawICS injection)
+      if(Array.isArray(ev.alarms) && ev.alarms.length){
+        const added = new Set();
+        for(const al of ev.alarms){
+          const mins = Number(al.minutesBefore);
+          if(!Number.isFinite(mins) || mins<=0) continue;
+          const key = Math.floor(mins);
+          if(added.has(key)) continue; // avoid duplicates
+          added.add(key);
+          lines.push('BEGIN:VALARM');
+          lines.push(`TRIGGER:-PT${key}M`);
+          lines.push('ACTION:DISPLAY');
+          lines.push(`DESCRIPTION:${escapeICSText(al.description||'Reminder')}`);
+          lines.push('END:VALARM');
+        }
+      }
       lines.push('END:VEVENT');
-    }catch(e){ /* ignore one event */ }
+    } catch(e){ /* ignore one event */ }
   }
   lines.push('END:VCALENDAR');
   return lines.join('\r\n');
 }
-
-function buildOriginFromUrl(raw){
-  try { const u = new URL(raw); return `${u.protocol}//${u.hostname}${u.port?':'+u.port:''}/*`; } catch(_){ return null; }
-}
-
+// Core Radicale merge + upload with stats (insert/update/skip/delete + optional coverage deletion)
 async function mergeUploadWithRadicale(events, calendarName, server, meta = {}){
-  const cfg = server.config || {};
-  const base = String(cfg.base || DEFAULTS.radicalBase || '').replace(/\/$/, '');
-  const user = cfg.username || DEFAULTS.radicalUsername;
-  const auth = cfg.auth || DEFAULTS.radicalAuth || '';
-  if(!base || !user) throw new Error('服务器配置不完整');
-  const url = `${base}/${encodeURIComponent(user)}/${encodeURIComponent(calendarName)}.ics`;
-  const headers = {};
+  const cfg = server?.config || {};
+  const baseRaw = (cfg.base || '').trim();
+  if(!baseRaw) throw new Error('未配置 Radicale 基础地址');
+  const base = baseRaw.replace(/\/$/, '');
+  const user = (cfg.username || 'calendar').trim();
+  const auth = (cfg.auth || '').trim();
+  const url = `${base}/${encodeURIComponent(user)}/${encodeURIComponent(calendarName||'Calendar')}.ics`;
+  const headers = { };
   if(auth) headers['Authorization'] = auth;
-
-  // permissions
-  const originPattern = buildOriginFromUrl(base);
-  if(originPattern && chrome.permissions){
-    const ok = await new Promise((resolve)=>{
-      chrome.permissions.contains({ origins:[originPattern] }, (has)=> resolve(!!has));
-    });
-    if(!ok){ throw new Error('缺少服务器权限: ' + originPattern); }
-  }
-
-  // GET existing
   let existingText = '';
-  try { const res = await fetch(url, { method:'GET', headers }); if(res.ok) existingText = await res.text(); } catch(_){ }
-  const existingParsed = parseExistingICS(existingText);
-  const expandedIncoming = expandRecurringEvents(events, {
-    horizonDays: meta?.recurrenceHorizonDays || 365,
-    maxOccurrences: meta?.maxRecurrenceInstances || 400,
-  });
-  let kept = existingParsed;
-  let deleted = 0;
-  // Precompute existing signature map for stats
-  const existingSigMap = new Map();
-  for(const ev of existingParsed){ existingSigMap.set(normalizeForMerge(ev), ev); }
-  if(meta?.coverage && meta.windowStart instanceof Date && meta.windowEnd instanceof Date){
-    const startMs = meta.windowStart.getTime();
-    const endMs = meta.windowEnd.getTime();
-    const incomingSet = new Set(expandedIncoming.map(e => normalizeForMerge(e)));
-    kept = existingParsed.filter(ev => {
-      const sig = normalizeForMerge(ev);
-      if(incomingSet.has(sig)) return true; // will be merged/updated
-      const s = ev.startTime instanceof Date ? ev.startTime.getTime() : NaN;
-      if(!isNaN(s) && s >= startMs && s <= endMs){
-        return false; // drop inside window not present in incoming -> coverage deletion
-      }
-      return true; // keep outside window
-    });
-    deleted = existingParsed.length - kept.length;
-  }
-  const merged = mergeEvents(kept, expandedIncoming);
-  // Stats (day+title rule): same day (YYYY-MM-DD in local) + title considered the same logical event.
+  try {
+    const res = await fetch(url, { method:'GET', headers });
+    if(res.ok){ existingText = await res.text(); }
+  } catch(_){ /* treat as empty */ }
+  const existing = parseExistingICS(existingText);
+  // Build lookup maps
+  const existingByUid = new Map();
+  const existingByDayTitle = new Map();
+  const existingBySignature = new Map();
   function dayTitleKey(ev){
     if(!ev || !ev.startTime || !ev.title) return '';
     const d = ev.startTime instanceof Date ? ev.startTime : new Date(ev.startTime);
     if(!(d instanceof Date) || isNaN(d)) return '';
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth()+1).padStart(2,'0');
-    const dd = String(d.getDate()).padStart(2,'0');
-    return `${(ev.title||'').trim().toLowerCase()}|${yyyy}-${mm}-${dd}`;
+    const datePart = d.toISOString().slice(0,10);
+    return `${(ev.title||'').trim().toLowerCase()}|${datePart}`;
   }
-  const existingDayTitleMap = new Map();
-  for(const ev of existingParsed){
-    const k = dayTitleKey(ev);
-    if(k && !existingDayTitleMap.has(k)) existingDayTitleMap.set(k, ev);
+  for(const ev of existing){
+    if(ev.uid){ existingByUid.set(ev.uid.trim().toLowerCase(), ev); }
+    const k = dayTitleKey(ev); if(k && !existingByDayTitle.has(k)) existingByDayTitle.set(k, ev);
+    const sig = normalizeForMerge(ev); if(sig && !existingBySignature.has(sig)) existingBySignature.set(sig, ev);
   }
-  let inserted = 0, updated = 0, skipped = 0;
-  for(const ev of expandedIncoming){
-    const k = dayTitleKey(ev);
-    if(!k){ skipped++; continue; }
-    if(!existingDayTitleMap.has(k)){
-      inserted++; continue;
+  // Helpers for logical equality (decide skip vs update)
+  function sameLogical(a,b){
+    if(!a || !b) return false;
+    const f = (v)=> (v||'').trim();
+    const iso = (dt)=> (dt instanceof Date && !isNaN(dt)) ? dt.toISOString() : (dt? new Date(dt).toISOString(): '');
+    const rrA = (a.rrule||'').trim().toUpperCase();
+    const rrB = (b.rrule||'').trim().toUpperCase();
+    // Normalize alarms for comparison (minutesBefore ascending). Existing (a) may only have rawICS VALARM lines.
+    function normAlarmsFromRaw(ev){
+      const out = [];
+      if(ev && typeof ev.rawICS === 'string' && /BEGIN:VALARM/i.test(ev.rawICS)){
+        const lines = ev.rawICS.split(/\r?\n/);
+        for(let i=0;i<lines.length;i++){
+          const L = lines[i].trim();
+            if(/^TRIGGER:-PT(\d+)M$/i.test(L)){
+              const m = L.match(/-PT(\d+)M/i); if(m){ const mins = Number(m[1]); if(Number.isFinite(mins)) out.push(mins); }
+            }
+        }
+      }
+      if(Array.isArray(ev?.alarms)){
+        for(const al of ev.alarms){ const mins = Number(al.minutesBefore); if(Number.isFinite(mins) && mins>0) out.push(mins); }
+      }
+      return out.sort((x,y)=>x-y);
     }
-    const prev = existingDayTitleMap.get(k);
-    // Compare key fields (time range, location, description, rrule)
-    const changed = (()=>{
-      const eqDate = (a,b)=> (a instanceof Date && b instanceof Date) ? a.getTime()===b.getTime() : String(a||'')===String(b||'');
-      if(!eqDate(prev.startTime, ev.startTime)) return true;
-      if(!eqDate(prev.endTime, ev.endTime)) return true;
-      if((prev.location||'').trim() !== (ev.location||'').trim()) return true;
-      if((prev.description||'').trim() !== (ev.description||'').trim()) return true;
-      if((prev.rrule||'').trim() !== (ev.rrule||'').trim()) return true;
-      return false;
-    })();
-    if(changed) updated++; else skipped++;
+    const alarmsA = normAlarmsFromRaw(a);
+    const alarmsB = normAlarmsFromRaw(b);
+    const sameAlarms = alarmsA.length === alarmsB.length && alarmsA.every((v,i)=> v===alarmsB[i]);
+    return f(a.title) === f(b.title)
+      && f(a.location) === f(b.location)
+      && iso(a.startTime) === iso(b.startTime)
+      && iso(a.endTime) === iso(b.endTime)
+      && rrA === rrB
+      && (f(a.description) === f(b.description))
+      && sameAlarms;
   }
-  const ics = buildICS(merged, calendarName);
-  const putHeaders = { 'Content-Type': 'text/calendar; charset=utf-8', ...headers };
-  const put = await fetch(url, { method:'PUT', headers: putHeaders, body: ics });
-  if(put.status === 200 || put.status === 201 || put.status === 204){
-    return { ok:true, total: merged.length, url, coverage: !!meta?.coverage, deleted, inserted, updated, skipped };
+  const usedExisting = new Set();
+  const replacedExisting = new Map(); // existing event -> new event
+  const inserts = [];
+  let inserted=0, updated=0, skipped=0;
+  const incomingUidSet = new Set();
+  const incomingSignatureSet = new Set();
+  for(const ev of (events||[])){
+    if(!ev || !ev.title || !ev.startTime || !ev.endTime){ continue; }
+    const uidLower = (ev.uid || ev.id || '').trim().toLowerCase();
+    if(uidLower) incomingUidSet.add(uidLower);
+    const sig = normalizeForMerge(ev); if(sig) incomingSignatureSet.add(sig);
+    let matched = null; let matchType = '';
+    if(uidLower && existingByUid.has(uidLower)){ matched = existingByUid.get(uidLower); matchType='uid'; }
+    else {
+      const k = dayTitleKey(ev); if(k && existingByDayTitle.has(k)){ matched = existingByDayTitle.get(k); matchType='dayTitle'; }
+      else if(existingBySignature.has(sig)){ matched = existingBySignature.get(sig); matchType='signature'; }
+    }
+    if(matched){
+      if(sameLogical(matched, ev)){
+        skipped++; usedExisting.add(matched); continue;
+      } else {
+        // Update: preserve UID
+        // Force rebuild: drop existing rawICS so buildICS will regenerate including new VALARM
+        const newEv = { ...matched, ...ev };
+        if(newEv.rawICS) delete newEv.rawICS;
+        if(matched.uid && !newEv.uid) newEv.uid = matched.uid;
+        replacedExisting.set(matched, newEv);
+        usedExisting.add(matched);
+        updated++;
+      }
+    } else {
+      // New insert: ensure uid
+      if(!ev.uid) ev.uid = ev.id || 'evt-' + Math.random().toString(36).slice(2);
+      inserts.push(ev); inserted++;
+    }
   }
-  throw new Error('上传失败 ' + put.status);
+  // Coverage deletion: events in window not matched by any incoming (by uid/signature)
+  let deleted = 0;
+  const toDeleteSet = new Set();
+  if(meta?.coverage){
+    // Determine window
+    const winStart = meta.windowStart instanceof Date ? meta.windowStart : null;
+    const winEnd = meta.windowEnd instanceof Date ? meta.windowEnd : null;
+    for(const ex of existing){
+      if(usedExisting.has(ex)) continue; // already kept implicitly
+      if(ex.uid && incomingUidSet.has(ex.uid.trim().toLowerCase())){ usedExisting.add(ex); continue; }
+      const sig = normalizeForMerge(ex); if(sig && incomingSignatureSet.has(sig)){ usedExisting.add(ex); continue; }
+      if(winStart && winEnd && ex.startTime instanceof Date){
+        const t = ex.startTime.getTime();
+        if(t >= winStart.getTime() && t <= winEnd.getTime()){
+          toDeleteSet.add(ex); deleted++; continue;
+        }
+      }
+    }
+  }
+  // Build final list
+  const finalEvents = [];
+  for(const ex of existing){
+    if(toDeleteSet.has(ex)) continue; // deleted
+    if(replacedExisting.has(ex)){ finalEvents.push(replacedExisting.get(ex)); continue; }
+    finalEvents.push(ex); // untouched or skipped
+  }
+  for(const ins of inserts){ finalEvents.push(ins); }
+  const icsOut = buildICS(finalEvents, calendarName);
+  try {
+    const putRes = await fetch(url, { method:'PUT', headers: { ...headers, 'Content-Type':'text/calendar' }, body: icsOut });
+    if(!putRes.ok){
+      let detail='';
+      try { detail = (await putRes.text())?.slice(0,200)||''; } catch(_){ }
+      throw new Error('上传失败: '+ putRes.status + (detail? (' '+detail):''));
+    }
+  } catch(e){ throw new Error('上传 Radicale 失败: ' + (e?.message||e)); }
+  const total = finalEvents.length;
+  return { ok:true, total, inserted, updated, skipped, deleted, coverage: !!meta?.coverage };
 }
 
 // ---------------- Google Calendar Support ----------------
@@ -670,11 +755,25 @@ async function uploadToGoogleCalendar(events, calendarName, server, meta = {}){
     const wantEnd = prepared.endPrep.payload;
     const wantRecurrence = prepared.recurrence || [];
     const existingRecurrence = Array.isArray(existingItem.recurrence)? existingItem.recurrence.map(r=>r.trim()): [];
-    return (existingItem.summary||'').trim() === (ev.title||'').trim()
-      && (existingItem.location||'').trim() === (ev.location||'').trim()
-      && equalPayload(exStart, wantStart)
-      && equalPayload(exEnd, wantEnd)
-      && arraysEqual(existingRecurrence, wantRecurrence);
+      // Normalize alarms (popup reminders) for comparison
+      function normAlarmsGoogle(item){
+        const overrides = item?.reminders?.overrides;
+        if(!Array.isArray(overrides) || !overrides.length || item?.reminders?.useDefault) return [];
+        return overrides.filter(o=> o && (o.method==='popup'||!o.method)).map(o=> Number(o.minutes)).filter(m=> Number.isFinite(m)).sort((a,b)=>a-b);
+      }
+      function normAlarmsEv(evObj){
+        if(!Array.isArray(evObj?.alarms)) return [];
+        return evObj.alarms.map(a=> Number(a.minutesBefore)).filter(m=> Number.isFinite(m) && m>0).sort((a,b)=>a-b);
+      }
+      const existingAlarms = normAlarmsGoogle(existingItem);
+      const wantAlarms = normAlarmsEv(ev);
+      const sameAlarms = existingAlarms.length === wantAlarms.length && existingAlarms.every((v,i)=> v===wantAlarms[i]);
+      return (existingItem.summary||'').trim() === (ev.title||'').trim()
+        && (existingItem.location||'').trim() === (ev.location||'').trim()
+        && equalPayload(exStart, wantStart)
+        && equalPayload(exEnd, wantEnd)
+        && arraysEqual(existingRecurrence, wantRecurrence)
+        && sameAlarms;
   }
   for(const ev of events){
     const prepared = prepareGoogleEvent(ev); if(!prepared){ skipped++; continue; }
@@ -754,6 +853,10 @@ async function uploadToGoogleCalendar(events, calendarName, server, meta = {}){
     const { prepared, existing: ex } = item;
     const ev = prepared.event;
     const body = { summary: ev.title, location: ev.location || undefined, description: ev.description? String(ev.description):undefined, start: prepared.startPrep.payload, end: prepared.endPrep.payload };
+    if(Array.isArray(ev.alarms) && ev.alarms.length){
+      const overrides = ev.alarms.map(a=> Number(a.minutesBefore)).filter(m=> Number.isFinite(m) && m>0).map(m=> ({ method:'popup', minutes: m }));
+      if(overrides.length) body.reminders = { useDefault: false, overrides };
+    }
     if(prepared.recurrence && prepared.recurrence.length) body.recurrence = prepared.recurrence;
     const updateUrl = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(ex.id)}`;
     const res = await authRetryWrapper(()=> fetch(updateUrl, { method:'PATCH', headers:{ 'Authorization': `Bearer ${accessToken}`, 'Content-Type':'application/json' }, body: JSON.stringify(body) }));
@@ -762,6 +865,10 @@ async function uploadToGoogleCalendar(events, calendarName, server, meta = {}){
   for(const prepared of toInsert){
     const ev = prepared.event;
     const body = { summary: ev.title, location: ev.location || undefined, description: ev.description? String(ev.description):undefined, start: prepared.startPrep.payload, end: prepared.endPrep.payload };
+    if(Array.isArray(ev.alarms) && ev.alarms.length){
+      const overrides = ev.alarms.map(a=> Number(a.minutesBefore)).filter(m=> Number.isFinite(m) && m>0).map(m=> ({ method:'popup', minutes: m }));
+      if(overrides.length) body.reminders = { useDefault: false, overrides };
+    }
     if(prepared.recurrence && prepared.recurrence.length) body.recurrence = prepared.recurrence;
     if(ev.uid) body.iCalUID = String(ev.uid); else if(ev.id) body.iCalUID = String(ev.id);
     const createUrl = `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`;

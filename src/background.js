@@ -830,9 +830,9 @@ async function runSinglePageTask(task){
       }
     } catch { text=''; }
     const eventsParsed = await parseWithParser(text, parser, { jsonPaths: modeConfig.jsonPaths });
-    const { total } = await uploadWithSelectedServer(eventsParsed || [], calendarName, task.serverId);
-  notifyAll(formatStatsNotice(`任务 ${calendarName} (parser:${parser.name||parser.type}) 完成`, (eventsParsed||[]).length, { total }));
-    return { added: (eventsParsed||[]).length, total, direct: parser.type === 'json_mapping' };
+    const uploadResult = await uploadWithSelectedServer(eventsParsed || [], calendarName, task.serverId);
+    notifyAll(formatStatsNotice(`任务 ${calendarName} (parser:${parser.name||parser.type}) 完成`, (eventsParsed||[]).length, uploadResult));
+    return { added: (eventsParsed||[]).length, total: uploadResult.total, direct: parser.type === 'json_mapping', ...uploadResult };
   }
   // No explicit parser: choose fetch by parseMode
   let text = '';
@@ -845,9 +845,9 @@ async function runSinglePageTask(task){
     const pseudoSettings = { pageParseJsonPaths: modeConfig.jsonPaths };
     const events = await tryParseJsonEvents(text, pseudoSettings) || [];
     if(events.length){
-      const info = await mergeUpload(calendarName || 'PAGE-PARSED', events);
-  notifyAll(formatStatsNotice(`任务 ${calendarName} (direct) 完成`, events.length, info));
-      return { added: events.length, total: info.total, direct:true };
+    const info = await mergeUpload(calendarName || 'PAGE-PARSED', events);
+    notifyAll(formatStatsNotice(`任务 ${calendarName} (direct) 完成`, events.length, info));
+    return { added: events.length, total: info.total, direct:true, ...info };
     }
     // direct 失败则尝试 LLM 兜底
   }
@@ -858,10 +858,10 @@ async function runSinglePageTask(task){
     if(narrowed) llmInput = narrowed;
   }
   const eventsLLM = await parseTextViaLLM(llmInput);
-  const { total: total2 } = await uploadWithSelectedServer(eventsLLM, calendarName, task.serverId);
-  notifyAll(formatStatsNotice(`任务 ${calendarName} 完成`, eventsLLM.length, { total: total2, inserted: eventsLLM.length }));
-  await recordTaskStats(task.id, eventsLLM.length, total2);
-  return { added: eventsLLM.length, total: total2 };
+  const uploadResult2 = await uploadWithSelectedServer(eventsLLM, calendarName, task.serverId);
+  notifyAll(formatStatsNotice(`任务 ${calendarName} 完成`, eventsLLM.length, uploadResult2));
+  await recordTaskStats(task.id, eventsLLM.length, uploadResult2.total);
+  return { added: eventsLLM.length, total: uploadResult2.total, ...uploadResult2 };
 }
 
 async function runJwbTask(task){
