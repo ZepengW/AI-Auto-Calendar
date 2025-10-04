@@ -22,12 +22,14 @@
 	- `chatgpt_agent`（OpenAI 兼容 Chat Completions）
 	- `bailian_agent`（阿里云百炼 Apps Completion）
 	- `json_mapping`（面向结构化 JSON 的字段映射）
+	- `jiaowoban`（交我办日历专用解析：最小字段集 + 自动提醒）
 - 上传服务器可插拔
 	- `radicale`（PUT 合并上传 .ics）
-	- `google`（Google Calendar API，支持浏览器身份或 OAuth 授权）
+	- `google`（Google Calendar API，支持浏览器身份 / OAuth 授权，差异增量同步 + 覆盖删除窗口）
 - 任务化调度与触发
 	- 定时间隔（每 N 分钟）、指定时刻（HH:mm 多时点）、访问页面触发（URL 前缀匹配）
 	- 可选“预热”URL（打开后台页刷新登录态），支持等待毫秒
+	- “交我办”窗口任务模式（可设置前后天数 & 覆盖模式：缺失即删除）
 - 快捷操作与独立页面
 	- 右键选中文本→“日程解析”
 	- 弹窗粘贴自由文本→解析并上传/下载 ICS
@@ -35,6 +37,10 @@
 - 权限与体验
 	- 使用可选 Host 权限（on-demand 请求），仅在需要访问的域名上申请
 	- 解析/任务/服务器均独立配置，互不影响
+	- 任务/上传结果统计：获取 / 新增 / 更新 / 删除 / 跳过 清晰区分（含覆盖标记）
+	- Google 与 Radicale 均支持“覆盖”窗口删除（仅清理时间窗口内缺失事件）
+	- 解析节点输出直接支持 ICS 片段复用，减少重复组装
+	- 去重与差异检测：同日同标题事件按字段差异精确判断是否更新或跳过
 
 
 ## 安装与载入
@@ -71,6 +77,7 @@
 - HTTP 自动化拉取并同步（结构化接口）
 	1. 设置 JSON 映射解析节点；新建“任务”，填入接口 URL、JSON 路径、调度方式与服务器。
 	2. 任务按计划拉取 → 解析 → 合并上传。详见：[docs/tutorials/03-http-json-sjtu.md](docs/tutorials/03-http-json-sjtu.md)
+	3. 使用交我办专用模式：只需启用“交我办”任务，无需再填 URL，自动获取窗口期事件并按需覆盖删除。
 
 
 ## 权限与隐私
@@ -86,21 +93,9 @@
 反馈与支持：
 - 问题反馈（Issues）：https://github.com/ZepengW/AI-Auto-Calendar/issues
 
-
-## 常见问题（FAQ）
-- 解析失败/无事件？
-	- LLM 输出非严格 JSON 时会被拒绝；可在“解析页”预览并手动修订字段再上传。
-	- 对于结构化接口，优先使用 `json_mapping`，通过 JSON 路径直取再映射。
-- 时间解析不准确？
-	- 插件支持多种时间格式：`YYYY-MM-DD HH:mm`、ISO 带时区、`YYYYMMDDTHHmmssZ/+0800` 等。
-	- 生成 ICS 默认以 UTC 存储（`Z`），日历客户端会按本地时区显示。
-- Google 授权失败？
-	- 确保设置页看到 `https://<扩展ID>.chromiumapp.org/` 作为回调地址。
-	- 先尝试浏览器 Identity（无 client_secret），不成再改用 OAuth2（PKCE）。
-- 没有看到权限弹窗？
-	- 进入设置页顶部点击“申请所需站点权限”。
-
-
+## 版本历史
+完整版本更新记录参见 [CHANGELOG.md](CHANGELOG.md)
 
 ## 许可
 本项目仅供学习与个人使用，请遵循目标站点/服务的使用条款与数据合规要求。
+

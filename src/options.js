@@ -197,6 +197,9 @@ async function init(){
       openTaskModal();
     }
   } catch(e){ /* ignore deep-link errors */ }
+
+  // Load debug flag last (after settings potentially merged elsewhere)
+  // removed debug flag UI; keep existing stored setting untouched
 }
 
 function updateJsonPanelVisibility(){

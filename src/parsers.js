@@ -523,7 +523,8 @@ async function parseViaJiaowoban(rawText, config, options = {}){
     // claimIcon -> 3 小时前提醒
     let alarms = undefined;
     if(claimRaw === true || String(claimRaw).toLowerCase()==='true'){
-      alarms = [ { minutesBefore: 180} ];
+      // Add description so ICS VALARM will contain DESCRIPTION:Reminder
+      alarms = [ { minutesBefore: 180, description: 'Reminder' } ];
     }
     // 仅输出所需字段（raw 保留便于后续调试）
     const ev = { id: idRaw || undefined, title: String(titleRaw), startTime: sTime, endTime: eTime, location: locRaw||'', raw: it };

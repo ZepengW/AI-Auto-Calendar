@@ -74,11 +74,23 @@ function parseExistingICS(text){
       cur = { rawProps:{}, rawLines:[raw] };
       continue;
     }
+    // If inside a VEVENT and we encounter BEGIN:VALARM, enter alarm passthrough mode so VALARM DESCRIPTION does not overwrite event description
+    if(cur && /^BEGIN:VALARM/i.test(line)){
+      cur.rawLines.push(raw);
+      cur.inAlarm = true;
+      continue;
+    }
+    if(cur && cur.inAlarm){
+      cur.rawLines.push(raw);
+      if(/^END:VALARM/i.test(line)) cur.inAlarm = false;
+      continue;
+    }
     if(line === 'END:VEVENT'){
       if(cur){
         cur.rawLines.push(raw);
         cur.rawICS = cur.rawLines.join('\n');
         delete cur.rawLines;
+        delete cur.inAlarm;
         events.push(cur);
       }
       cur=null;
@@ -99,6 +111,45 @@ function parseExistingICS(text){
         if(key === 'LOCATION') cur.location = value;
         if(key === 'DESCRIPTION') cur.description = value;
         if(key === 'RRULE') cur.rrule = value;
+      }
+    }
+  }
+  // Post-process: extract VALARM triggers into alarms array (minutesBefore)
+  for(const ev of events){
+    if(ev && typeof ev.rawICS === 'string' && /BEGIN:VALARM/i.test(ev.rawICS) && !Array.isArray(ev.alarms)){
+      // Parse individual VALARM blocks preserving DESCRIPTION (use 'Reminder' fallback)
+      const blocks = ev.rawICS.split(/BEGIN:VALARM/i).slice(1).map(b=> 'BEGIN:VALARM'+b);
+      const out = [];
+      for(const block of blocks){
+        const endIdx = block.search(/END:VALARM/i);
+        const seg = endIdx>=0 ? block.slice(0, endIdx+10) : block; // include END:VALARM
+        const trig = seg.match(/TRIGGER:-PT(\d+)([HM])/i);
+        if(!trig) continue; let mins = Number(trig[1]); const unit = trig[2].toUpperCase(); if(unit==='H') mins *= 60;
+        if(!Number.isFinite(mins) || mins<=0) continue;
+        const descMatch = seg.match(/DESCRIPTION:(.*)/i);
+        let desc = descMatch ? descMatch[1].trim() : 'Reminder';
+        // Unfold potential line continuations (ICS uses CRLF + space) - simple replacement
+        desc = desc.replace(/\r?\n[ \t]/g,'');
+        out.push({ minutesBefore: mins, description: desc||'Reminder' });
+      }
+      if(out.length){
+        // Deduplicate by minutesBefore keeping first description
+        const uniq = [];
+        const seen = new Set();
+        for(const a of out.sort((x,y)=> x.minutesBefore - y.minutesBefore)){
+          if(seen.has(a.minutesBefore)) continue;
+          seen.add(a.minutesBefore);
+          uniq.push(a);
+        }
+        ev.alarms = uniq;
+      }
+    }
+    // If event.description exists but only comes from VALARM (i.e., no DESCRIPTION outside alarm blocks), clear it
+    if(ev && typeof ev.rawICS === 'string' && ev.description){
+      const raw = ev.rawICS;
+      const hasEventDesc = /\nDESCRIPTION:/i.test('\n'+raw.replace(/BEGIN:VALARM[\s\S]*?END:VALARM/ig,''));
+      if(!hasEventDesc && /^Reminder$/i.test(ev.description.trim())){
+        delete ev.description;
       }
     }
   }
@@ -239,6 +290,10 @@ function buildICS(events, calendarName = 'Calendar'){
 // Core Radicale merge + upload with stats (insert/update/skip/delete + optional coverage deletion)
 async function mergeUploadWithRadicale(events, calendarName, server, meta = {}){
   const cfg = server?.config || {};
+  // Lazy load settings for debug flag (avoid circular import at top-level to keep tree-shake simple)
+  let settings = null;
+  try { settings = await loadSettings(); } catch(_) { settings = { debugServerDiff:false }; }
+  const debugDiff = !!settings.debugServerDiff;
   const baseRaw = (cfg.base || '').trim();
   if(!baseRaw) throw new Error('未配置 Radicale 基础地址');
   const base = baseRaw.replace(/\/$/, '');
@@ -279,13 +334,11 @@ async function mergeUploadWithRadicale(events, calendarName, server, meta = {}){
     // Normalize alarms for comparison (minutesBefore ascending). Existing (a) may only have rawICS VALARM lines.
     function normAlarmsFromRaw(ev){
       const out = [];
-      if(ev && typeof ev.rawICS === 'string' && /BEGIN:VALARM/i.test(ev.rawICS)){
-        const lines = ev.rawICS.split(/\r?\n/);
-        for(let i=0;i<lines.length;i++){
-          const L = lines[i].trim();
-            if(/^TRIGGER:-PT(\d+)M$/i.test(L)){
-              const m = L.match(/-PT(\d+)M/i); if(m){ const mins = Number(m[1]); if(Number.isFinite(mins)) out.push(mins); }
-            }
+      if(ev && typeof ev.rawICS === 'string'){
+        const blocks = ev.rawICS.split(/BEGIN:VALARM/i).slice(1).map(b=> 'BEGIN:VALARM'+b);
+        for(const block of blocks){
+          const trig = block.match(/TRIGGER:-PT(\d+)([HM])/i);
+            if(trig){ let mins = Number(trig[1]); const unit = trig[2].toUpperCase(); if(unit==='H') mins *= 60; if(Number.isFinite(mins) && mins>0) out.push(mins); }
         }
       }
       if(Array.isArray(ev?.alarms)){
@@ -296,12 +349,15 @@ async function mergeUploadWithRadicale(events, calendarName, server, meta = {}){
     const alarmsA = normAlarmsFromRaw(a);
     const alarmsB = normAlarmsFromRaw(b);
     const sameAlarms = alarmsA.length === alarmsB.length && alarmsA.every((v,i)=> v===alarmsB[i]);
+    // Treat placeholder description 'Reminder' as empty (server may drop it)
+    const descA = (f(a.description)==='Reminder') ? '' : f(a.description);
+    const descB = (f(b.description)==='Reminder') ? '' : f(b.description);
     return f(a.title) === f(b.title)
       && f(a.location) === f(b.location)
       && iso(a.startTime) === iso(b.startTime)
       && iso(a.endTime) === iso(b.endTime)
       && rrA === rrB
-      && (f(a.description) === f(b.description))
+      && descA === descB
       && sameAlarms;
   }
   const usedExisting = new Set();
@@ -324,16 +380,46 @@ async function mergeUploadWithRadicale(events, calendarName, server, meta = {}){
     if(matched){
       if(sameLogical(matched, ev)){
         skipped++; usedExisting.add(matched); continue;
-      } else {
-        // Update: preserve UID
-        // Force rebuild: drop existing rawICS so buildICS will regenerate including new VALARM
-        const newEv = { ...matched, ...ev };
-        if(newEv.rawICS) delete newEv.rawICS;
-        if(matched.uid && !newEv.uid) newEv.uid = matched.uid;
-        replacedExisting.set(matched, newEv);
-        usedExisting.add(matched);
-        updated++;
       }
+      // Update: preserve UID
+      const newEv = { ...matched, ...ev };
+      if(newEv.rawICS) delete newEv.rawICS;
+      if(matched.uid && !newEv.uid) newEv.uid = matched.uid;
+      if(debugDiff){
+        const diffs = [];
+        const cmpList = [
+          ['title', matched.title, ev.title],
+          ['startTime', matched.startTime, ev.startTime],
+          ['endTime', matched.endTime, ev.endTime],
+          ['location', matched.location, ev.location],
+          ['description', matched.description, ev.description],
+          ['rrule', matched.rrule, ev.rrule],
+        ];
+        function normAlarmsForCmp(x){
+          function extract(arr){ return arr.map(a=>Number(a.minutesBefore)).filter(n=>Number.isFinite(n)&&n>0).sort((a,b)=>a-b); }
+          if(Array.isArray(x?.alarms)) return extract(x.alarms).join(',');
+          if(typeof x?.rawICS === 'string' && /BEGIN:VALARM/i.test(x.rawICS)){
+            const blocks = x.rawICS.split(/BEGIN:VALARM/i).slice(1).map(b=>'BEGIN:VALARM'+b);
+            const ms=[]; for(const bl of blocks){ const m=bl.match(/TRIGGER:-PT(\d+)([HM])/i); if(m){ let v=Number(m[1]); if(m[2].toUpperCase()==='H') v*=60; if(Number.isFinite(v)) ms.push(v); } }
+            return ms.sort((a,b)=>a-b).join(',');
+          }
+          return '';
+        }
+        const alarmsOld = normAlarmsForCmp(matched);
+        const alarmsNew = normAlarmsForCmp(ev);
+        if(alarmsOld !== alarmsNew) diffs.push({ field:'alarms', from:alarmsOld, to:alarmsNew });
+        for(const [field, aVal, bVal] of cmpList){
+          const aStr = aVal instanceof Date ? aVal.toISOString() : (aVal||'');
+          const bStr = bVal instanceof Date ? bVal.toISOString() : (bVal||'');
+          if(aStr !== bStr){ diffs.push({ field, from:aStr, to:bStr }); }
+        }
+        if(diffs.length){
+          console.log('[Radicale-DIFF]', calendarName, 'UID=', matched.uid||matched.id, diffs);
+        }
+      }
+      replacedExisting.set(matched, newEv);
+      usedExisting.add(matched);
+      updated++;
     } else {
       // New insert: ensure uid
       if(!ev.uid) ev.uid = ev.id || 'evt-' + Math.random().toString(36).slice(2);
@@ -367,6 +453,48 @@ async function mergeUploadWithRadicale(events, calendarName, server, meta = {}){
     finalEvents.push(ex); // untouched or skipped
   }
   for(const ins of inserts){ finalEvents.push(ins); }
+  // Detect no-op semantic update (all updated events produce identical fingerprints to existing)
+  function fingerprint(ev){
+    const iso = (dt)=> (dt instanceof Date && !isNaN(dt)) ? dt.toISOString() : (dt? new Date(dt).toISOString(): '');
+    const alarms = Array.isArray(ev.alarms)? ev.alarms.map(a=> Number(a.minutesBefore)).filter(m=>Number.isFinite(m)&&m>0).sort((a,b)=>a-b).join(',') : '';
+    return [ (ev.title||'').trim(), iso(ev.startTime), iso(ev.endTime), (ev.location||'').trim(), (ev.description||'').trim(), (ev.rrule||'').trim().toUpperCase(), alarms ].join('|');
+  }
+  // Extract alarms from raw existing if not already in object
+  function enrichExistingAlarms(ev){
+    if(Array.isArray(ev.alarms)) return ev;
+    if(ev && typeof ev.rawICS === 'string' && /BEGIN:VALARM/i.test(ev.rawICS)){
+      const blocks = ev.rawICS.split(/BEGIN:VALARM/i).slice(1).map(b=> 'BEGIN:VALARM'+b);
+      const temp = [];
+      for(const block of blocks){
+        const trig = block.match(/TRIGGER:-PT(\d+)([HM])/i);
+        if(!trig) continue; let mins = Number(trig[1]); const unit = trig[2].toUpperCase(); if(unit==='H') mins *= 60;
+        if(!Number.isFinite(mins) || mins<=0) continue;
+        const descMatch = block.match(/DESCRIPTION:(.*)/i);
+        let desc = descMatch ? descMatch[1].trim() : 'Reminder';
+        desc = desc.replace(/\r?\n[ \t]/g,'');
+        temp.push({ minutesBefore: mins, description: desc||'Reminder' });
+      }
+      if(temp.length){
+        const uniq=[]; const seen=new Set();
+        for(const a of temp.sort((x,y)=> x.minutesBefore - y.minutesBefore)){
+          if(seen.has(a.minutesBefore)) continue; seen.add(a.minutesBefore); uniq.push(a);
+        }
+        ev.alarms = uniq;
+      }
+    }
+    return ev;
+  }
+  if(inserted===0 && deleted===0 && updated>0){
+    let allSame = true;
+    for(const ex of existing){
+      if(toDeleteSet.has(ex)) continue; // deleted would break preconditions but keep safe
+      const current = replacedExisting.has(ex)? replacedExisting.get(ex) : ex;
+      enrichExistingAlarms(ex);
+      enrichExistingAlarms(current);
+      if(fingerprint(ex) !== fingerprint(current)){ allSame=false; break; }
+    }
+    if(allSame){ skipped += updated; updated = 0; }
+  }
   const icsOut = buildICS(finalEvents, calendarName);
   try {
     const putRes = await fetch(url, { method:'PUT', headers: { ...headers, 'Content-Type':'text/calendar' }, body: icsOut });

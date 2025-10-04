@@ -32,6 +32,7 @@ export const DEFAULTS = {
   // 语法： path = seg(.seg)*  seg = key | key[index] | key[*] | [index] | [*]
   // key: /^[A-Za-z0-9_]+$/; index: 数字
   pageParseJsonPaths: 'data.events[*]',
+  debugServerDiff: false, // 新增：服务器上传差异调试日志开关
 };
 
 // Pages where calendar features are active
