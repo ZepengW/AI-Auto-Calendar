@@ -508,6 +508,18 @@ async function parseViaJiaowoban(rawText, config, options = {}){
   const fClaim = listOrDefault(fm.claimIcon,['claimIcon']);
   function first(obj, keys){ for(const k of keys){ if(obj && Object.prototype.hasOwnProperty.call(obj,k) && obj[k]!=null) return obj[k]; } return undefined; }
   const out = [];
+  // Helper to fetch detail for each event (sequential to avoid burst; can optimize later)
+  async function fetchDetail(id){
+    if(!id) return null;
+    try {
+      const url = `https://calendar.sjtu.edu.cn/api/event/detail?id=${encodeURIComponent(id)}`;
+      const resp = await fetch(url, { method:'GET' });
+      if(!resp.ok) return null;
+      const j = await resp.json();
+      if(j && j.success && j.data) return j.data;
+      return null;
+    } catch(_){ return null; }
+  }
   for(const it of eventsArr){
     if(!it || typeof it !== 'object') continue;
     const titleRaw = first(it, fTitle);
@@ -520,15 +532,22 @@ async function parseViaJiaowoban(rawText, config, options = {}){
     const sTime = parseSJTUTime(sRaw) || parseLLMTime(sRaw) || sRaw;
     const eTime = parseSJTUTime(eRaw) || parseLLMTime(eRaw) || eRaw;
     const allDayFlag = it.allDay === true; // 若需要保留全天语义可继续使用
-    // claimIcon -> 3 小时前提醒
+    let detail = await fetchDetail(idRaw);
+    // Map detail.body -> description; detail.reminderMinutes -> dynamic alarm
+    let description = undefined;
     let alarms = undefined;
-    if(claimRaw === true || String(claimRaw).toLowerCase()==='true'){
-      // Add description so ICS VALARM will contain DESCRIPTION:Reminder
+    if(detail){
+      if(detail.body){ description = String(detail.body).replace(/\r\n/g,'\n').trim() || undefined; }
+      const rmins = Number(detail.reminderMinutes);
+      if(Number.isFinite(rmins) && rmins>0){ alarms = [ { minutesBefore: rmins, description: 'Reminder' } ]; }
+    }
+    // fallback to claimIcon 3h if no detail reminder provided
+    if(!alarms && (claimRaw === true || String(claimRaw).toLowerCase()==='true')){
       alarms = [ { minutesBefore: 180, description: 'Reminder' } ];
     }
-    // 仅输出所需字段（raw 保留便于后续调试）
     const ev = { id: idRaw || undefined, title: String(titleRaw), startTime: sTime, endTime: eTime, location: locRaw||'', raw: it };
     if(allDayFlag) ev.allDay = true;
+    if(description) ev.description = description;
     if(alarms) ev.alarms = alarms;
     out.push(ev);
   }
