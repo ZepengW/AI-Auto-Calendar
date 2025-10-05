@@ -101,6 +101,8 @@ async function init(){
   els.btnGoogleRevoke = qs('btnGoogleRevoke');
   els.googleRedirectHint = qs('google_redirect_hint');
   els.googleAuthStatus = qs('googleAuthStatus');
+  els.googleTermsAccept = qs('google_terms_accept');
+  els.googleTermsHint = qs('google_terms_hint');
   els.closeServerModal = qs('closeServerModal');
   els._editingServerId = null;
   els._serversCache = null;
@@ -160,6 +162,25 @@ async function init(){
   els.btnGoogleAuthorize?.addEventListener('click', onClickGoogleAuthorize);
   els.btnGoogleForceConsent?.addEventListener('click', ()=> onClickGoogleAuthorize({ forceConsent:true }));
   els.btnGoogleRevoke?.addEventListener('click', onClickGoogleRevoke);
+  els.googleTermsAccept?.addEventListener('change', ()=>{
+    // For unsaved server, store acceptance in pending config so user can auth first
+    if(els.server_type?.value === 'google'){
+      if(!els._editingServerId){
+        if(els.googleTermsAccept.checked){
+          els._pendingGoogleConfig = { ...(els._pendingGoogleConfig||{}), termsAcceptedAt: Date.now() };
+        } else if(els._pendingGoogleConfig){
+          delete els._pendingGoogleConfig.termsAcceptedAt;
+        }
+      } else if(els._editingServerId && Array.isArray(els._serversCache)){
+        // editing existing: do not immediately persist; only affect UI gating pre-save
+        const cur = els._serversCache.find(x=> x.id === els._editingServerId);
+        if(cur && cur.type==='google'){
+          // if user unchecks we only gate UI but keep stored acceptance until they save (optional design)
+        }
+      }
+      updateGoogleAuthUI();
+    }
+  });
   els.defaultServerSelect?.addEventListener('change', saveDefaultServerSelection);
   els.defaultParserSelect?.addEventListener('change', saveDefaultParserSelection);
   els.closeTaskModal?.addEventListener('click', closeTaskModal);
@@ -914,17 +935,25 @@ function updateGoogleAuthUI(cfg){
   }
   if(els.btnGoogleAuthorize){
     if(isGoogle){
-      els.btnGoogleAuthorize.disabled = false;
+      // authorization requires terms acceptance
+      const accepted = !!effectiveCfg.termsAcceptedAt || !!els.googleTermsAccept?.checked;
+      els.btnGoogleAuthorize.disabled = !accepted;
       els.btnGoogleAuthorize.title = saved ? '' : (els._pendingGoogleConfig ? '已完成授权，可保存' : '未保存节点：可先授权获取令牌，再保存');
       els.btnGoogleAuthorize.style.display = '';
       if(els.btnGoogleForceConsent){ els.btnGoogleForceConsent.style.display=''; els.btnGoogleForceConsent.disabled=false; }
       if(els.btnGoogleRevoke){ els.btnGoogleRevoke.style.display=''; els.btnGoogleRevoke.disabled=false; }
+      if(els.googleTermsHint){ els.googleTermsHint.style.display = accepted ? 'none':'block'; }
+      if(els.googleTermsAccept){
+        // reflect stored acceptance for saved nodes
+        if(effectiveCfg.termsAcceptedAt){ els.googleTermsAccept.checked = true; }
+      }
     }else{
       els.btnGoogleAuthorize.disabled = true;
       els.btnGoogleAuthorize.title = '';
       els.btnGoogleAuthorize.style.display = 'none';
       if(els.btnGoogleForceConsent){ els.btnGoogleForceConsent.style.display='none'; }
       if(els.btnGoogleRevoke){ els.btnGoogleRevoke.style.display='none'; }
+      if(els.googleTermsHint){ els.googleTermsHint.style.display='none'; }
     }
   }
   if(!els.googleAuthStatus){
@@ -941,14 +970,7 @@ function updateGoogleAuthUI(cfg){
     try { els.googleAuthPref.value = effectiveCfg.authPref; } catch(_){ /* ignore */ }
   }
   if(status === '未授权'){
-    try {
-      const manifest = chrome.runtime.getManifest?.() || {};
-      if(manifest.oauth2 && chrome.identity?.getAuthToken){
-        chrome.identity.getAuthToken({ interactive: false }, (tok)=>{
-          if(tok){ els.googleAuthStatus.textContent = '已授权(浏览器身份)'; }
-        });
-      }
-    } catch(_){ /* ignore identity probe errors */ }
+    // 不再静默探测浏览器已登录令牌，保持真正的“未授权”初始状态，直到用户点击授权按钮。
   }
 }
 
@@ -1084,6 +1106,14 @@ async function submitServerForm(ev){
     // Include pending token + authPref
     cfg = { ...(els._pendingGoogleConfig || {}) };
     if(els.googleAuthPref){ cfg.authPref = els.googleAuthPref.value || 'auto'; }
+    // persist acceptance
+    if(els.googleTermsAccept?.checked){
+      if(!cfg.termsAcceptedAt){ cfg.termsAcceptedAt = Date.now(); }
+    } else {
+      // if user unchecked, we can choose to remove; for safety keep token gating until re-checked
+      if(cfg.token){ delete cfg.token; }
+      delete cfg.termsAcceptedAt;
+    }
   }
   // common: default calendar name
   const defCal = (els.s_default_calendar_name?.value||'').trim();
@@ -1141,6 +1171,19 @@ async function onClickGoogleAuthorize(opts){
   if(type !== 'google') return;
   const savedId = els._editingServerId;
   const pref = els.googleAuthPref?.value || 'auto';
+  // consent gating
+  let accepted = false;
+  if(savedId && Array.isArray(els._serversCache)){
+    const cur = els._serversCache.find(x=> x.id === savedId);
+    accepted = !!cur?.config?.termsAcceptedAt || !!els.googleTermsAccept?.checked;
+  } else {
+    accepted = !!els._pendingGoogleConfig?.termsAcceptedAt || !!els.googleTermsAccept?.checked;
+  }
+  if(!accepted){
+    if(els.googleTermsHint){ els.googleTermsHint.style.display='block'; }
+    alert('请先阅读并勾选同意说明后再授权。');
+    return;
+  }
   if(!opts?.forceConsent && pref === 'pkce'){ opts = { ...(opts||{}), forceConsent:true }; }
   if(opts?.forceConsent && pref === 'identity'){ opts.forceConsent = false; }
   if(savedId){

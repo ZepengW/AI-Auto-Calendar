@@ -610,11 +610,16 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                             </ul>
                             数据用途：仅用于把你在本扩展中解析/创建的事件写入选定日历，或列出现有事件以进行去重与差异更新；不上传到第三方服务器。
                         </div>
+                        <label style="display:flex;flex-direction:row;align-items:flex-start;gap:6px;font-size:12px;margin-top:4px;margin-bottom:0">
+                            <input id="google_terms_accept" type="checkbox" style="margin-top:2px">
+                            <span style="line-height:1.5">我已阅读上方说明并同意本地仅用于写入/更新我的 Google 日历事件，理解可随时点击“撤销授权”删除本地令牌。</span>
+                        </label>
+                        <div id="google_terms_hint" style="display:none;font-size:11px;color:#b45309;background:#fffbeb;border:1px solid #fcd34d;padding:6px 8px;border-radius:6px">请先勾选同意再进行授权。</div>
                         <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
                             <button id="btnGoogleAuthorize" type="button" class="ghost" 
                                 title="使用浏览器身份快速授权" >快速授权/刷新</button>
-                            <button id="btnGoogleForceConsent" type="button" class="ghost"
-                                title="清除令牌并走标准 OAuth PKCE 流">PKCE授权</button>
+                            <!-- <button id="btnGoogleForceConsent" type="button" class="ghost"
+                                title="清除令牌并走标准 OAuth PKCE 流">PKCE授权</button> -->
                             <button id="btnGoogleRevoke" type="button" class="ghost" title="撤销当前授权并清除本地令牌">撤销授权</button>
                             <span id="googleAuthStatus" style="font-size:12px;color:#64748b;min-width:160px"></span>
                         </div>
