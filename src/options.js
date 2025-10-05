@@ -1133,7 +1133,7 @@ async function onClickGoogleAuthorize(){
       if(!r?.ok){
         const msg = r.error||'授权失败';
         if(/client id|clientid|缺少\s*google\s*client\s*id/i.test(msg)){
-          throw new Error(msg + '\n请在扩展包内 config/dev.json 中设置 googleClientId，或在源码 DEFAULTS 中配置。');
+          throw new Error(msg + '\n请在 manifest.json 的 oauth2.client_id 中配置 Google Client ID，或在服务器节点自定义。');
         }
         throw new Error(msg);
       }
@@ -1170,7 +1170,7 @@ async function onClickGoogleAuthorize(){
     if(!r?.ok){
       const msg = r.error||'授权失败';
       if(/client id|clientid|缺少\s*google\s*client\s*id/i.test(msg)){
-        throw new Error(msg + '\n请在扩展包内 config/dev.json 中设置 googleClientId，或在源码 DEFAULTS 中配置。');
+  throw new Error(msg + '\n请在 manifest.json 的 oauth2.client_id 中配置 Google Client ID，或在服务器节点自定义。');
       }
       throw new Error(msg);
     }

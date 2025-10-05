@@ -1,6 +1,6 @@
 // Pluggable calendar server registry and unified upload
 // Types supported: 'radicale' (merge via ICS), 'google' (Google Calendar API)
-import { DEFAULTS, isoToICSTime, escapeICSText, loadSettings, expandRecurringEvents } from './shared.js';
+import { DEFAULTS, isoToICSTime, escapeICSText, loadSettings, expandRecurringEvents, getGoogleClientId } from './shared.js';
 
 // ---------------- Storage ----------------
 export async function loadServers() {
@@ -683,14 +683,14 @@ function getMinMaxDates(arr){
 
 async function uploadToGoogleCalendar(events, calendarName, server, meta = {}){
   const cfg = server.config || {};
-  // Prefer merged settings (DEFAULTS + config/dev.json + saved) for Google settings
+  // Prefer merged settings (DEFAULTS + stored settings); dev-time config/dev.json removed
   const settings = await loadSettings();
   const nowSec = Math.floor(Date.now()/1000);
   let accessToken = null;
   if(cfg.token?.access_token && cfg.token.expires_at && cfg.token.expires_at - nowSec > 60){
     accessToken = cfg.token.access_token;
   }
-  const clientId = cfg.clientId || settings.googleClientId || DEFAULTS.googleClientId;
+  const clientId = cfg.clientId || getGoogleClientId() || settings.googleClientId || DEFAULTS.googleClientId;
   const clientSecret = cfg.clientSecret; // optional
   const fallbackCalendarId = (cfg.calendarId || settings.googleCalendarId || DEFAULTS.googleCalendarId || 'primary');
   // Try Chrome Identity first (no client_secret required). Requires manifest.oauth2 configured.
@@ -1193,9 +1193,9 @@ export async function authorizeServer(serverId){
   }
   // Use packaged/default clientId when not provided in server config
   const settings = await loadSettings();
-  const clientId = cfg.clientId || settings.googleClientId || DEFAULTS.googleClientId;
+  const clientId = cfg.clientId || getGoogleClientId() || settings.googleClientId || DEFAULTS.googleClientId;
   const clientSecret = cfg.clientSecret; // optional
-  if(!clientId) throw new Error('缺少 Google Client ID：请在 config/dev.json 或 DEFAULTS 中配置');
+  if(!clientId) throw new Error('缺少 Google Client ID：请在 manifest.oauth2 中配置，或在服务器节点中手动填写 Client ID');
   // Avoid re-prompt: if we already have a valid (not expired) token, return early
   const now = Math.floor(Date.now()/1000);
   if(cfg.token && cfg.token.access_token && cfg.token.expires_at && cfg.token.expires_at - now > 60){

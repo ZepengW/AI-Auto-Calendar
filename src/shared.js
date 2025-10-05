@@ -35,6 +35,18 @@ export const DEFAULTS = {
   debugServerDiff: true, // 调试日志默认开启（UI 已移除，可直接修改存储关闭）
 };
 
+// Helper: prefer manifest.oauth2 client_id (MV3) instead of packaged dev config
+export function getGoogleClientId(){
+  try {
+    const manifest = chrome?.runtime?.getManifest?.();
+    if(manifest && manifest.oauth2 && manifest.oauth2.client_id){
+      return manifest.oauth2.client_id;
+    }
+  } catch(_){ /* ignore */ }
+  // Fallback to settings / packaged config merging path using DEFAULTS.googleClientId
+  return DEFAULTS.googleClientId || '';
+}
+
 // Pages where calendar features are active
 export const allowedPages = ['my.sjtu.edu.cn/ui/calendar'];
 
@@ -46,8 +58,7 @@ export function getStorageArea() {
 export async function loadSettings() {
   const area = getStorageArea();
   const data = await area.get(null);
-  const devCfg = await loadPackagedConfig();
-  return { ...DEFAULTS, ...(devCfg||{}), ...data };
+  return { ...DEFAULTS, ...data };
 }
 
 export async function saveSettings(patch) {
@@ -818,16 +829,4 @@ export function ensureCalendarPayload(payload = {}, options = {}) {
   return result;
 }
 
-// Try load packaged dev config config/dev.json (optional)
-let _cachedDevConfig = undefined;
-export async function loadPackagedConfig(){
-  if(_cachedDevConfig !== undefined) return _cachedDevConfig;
-  try{
-    const url = chrome.runtime.getURL('config/dev.json');
-    const res = await fetch(url);
-    if(!res.ok) { _cachedDevConfig = null; return null; }
-    const json = await res.json();
-    _cachedDevConfig = json && typeof json === 'object' ? json : null;
-    return _cachedDevConfig;
-  } catch{ _cachedDevConfig = null; return null; }
-}
+// Removed dev-time config/dev.json loader to eliminate packaging dependency.
