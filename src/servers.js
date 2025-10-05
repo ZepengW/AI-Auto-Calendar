@@ -1174,15 +1174,44 @@ async function refreshGoogleToken(serverId, { clientId, clientSecret }){
   return newToken;
 }
 
-export async function authorizeServer(serverId){
+export async function authorizeServer(serverId, opts = {}){
   const s = await getServerById(serverId);
   if(!s) throw new Error('服务器不存在');
   if(s.type !== 'google') throw new Error('仅 Google 服务器需要授权');
   const cfg = s.config || {};
+  const authPref = (cfg.authPref || '').toLowerCase(); // 'identity' | 'pkce' | 'auto'
   // If manifest oauth2 is configured, try identity flow which doesn't require clientId here
   const manifest = (chrome?.runtime?.getManifest?.() || {});
   const hasManifestOauth = !!(manifest.oauth2 && manifest.oauth2.client_id);
-  if(hasManifestOauth && chrome?.identity?.getAuthToken){
+  const forceConsent = !!opts.forceConsent;
+  // Preference override: if user explicitly selected identity, ignore forceConsent unless pkce explicitly forced from UI
+  if(authPref === 'identity'){
+    // Clear any existing non-identity token to avoid mismatch
+    if(cfg.token && cfg.token.source !== 'identity'){
+      await updateServerConfig(serverId, { token: undefined, oauthMode: undefined });
+    }
+    if(hasManifestOauth && chrome?.identity?.getAuthToken){
+      let token;
+      try { token = await getTokenViaChromeIdentity({ interactive: false }); }
+      catch(_){ token = await getTokenViaChromeIdentity({ interactive: true }); }
+      if(!token) throw new Error('未获得浏览器身份令牌');
+      const expires_at = Math.floor(Date.now()/1000) + 3300;
+      await updateServerConfig(serverId, { token: { access_token: token, token_type: 'Bearer', expires_at, source:'identity' }, oauthMode: 'identity' });
+      return { ok:true };
+    } else {
+      throw new Error('浏览器未配置 manifest.oauth2，无法使用“浏览器身份”模式');
+    }
+  }
+  // pkce preference: always force PKCE (ignore identity shortcut)
+  if(authPref === 'pkce'){
+    // Force removal of identity token to trigger PKCE flow below
+    if(cfg.token && cfg.token.source === 'identity'){
+      try { if(chrome?.identity?.removeCachedAuthToken){ await new Promise(r=> chrome.identity.removeCachedAuthToken({ token: cfg.token.access_token }, ()=> r())); } } catch(_){ }
+      await updateServerConfig(serverId, { token: undefined, oauthMode: undefined });
+    }
+  }
+  // auto mode retains previous logic: identity shortcut unless forceConsent or pkce forced
+  if(authPref !== 'pkce' && !forceConsent && hasManifestOauth && chrome?.identity?.getAuthToken){
     let token;
     try { token = await getTokenViaChromeIdentity({ interactive: false }); }
     catch(_){ token = await getTokenViaChromeIdentity({ interactive: true }); }
@@ -1198,10 +1227,40 @@ export async function authorizeServer(serverId){
   if(!clientId) throw new Error('缺少 Google Client ID：请在 manifest.oauth2 中配置，或在服务器节点中手动填写 Client ID');
   // Avoid re-prompt: if we already have a valid (not expired) token, return early
   const now = Math.floor(Date.now()/1000);
-  if(cfg.token && cfg.token.access_token && cfg.token.expires_at && cfg.token.expires_at - now > 60){
+  if(!forceConsent && cfg.token && cfg.token.access_token && cfg.token.expires_at && cfg.token.expires_at - now > 60){
     return { ok:true };
   }
+  if(forceConsent && cfg.token){
+    // Clear existing token to force OAuth screen
+    try {
+      if(cfg.token.source === 'identity' && chrome?.identity?.removeCachedAuthToken){
+        await new Promise(r=> chrome.identity.removeCachedAuthToken({ token: cfg.token.access_token }, ()=> r()));
+      }
+    } catch(_){ }
+    await updateServerConfig(serverId, { token: undefined, oauthMode: undefined });
+  }
   await ensureGoogleAccessToken(serverId, { clientId, clientSecret, scopes:['https://www.googleapis.com/auth/calendar'] });
+  return { ok:true };
+}
+
+export async function revokeServerAuth(serverId){
+  const s = await getServerById(serverId);
+  if(!s) throw new Error('服务器不存在');
+  if(s.type !== 'google') throw new Error('仅 Google 服务器可撤销');
+  const cfg = s.config || {};
+  const tokenObj = cfg.token || {};
+  const token = tokenObj.access_token || tokenObj.refresh_token;
+  if(token){
+    try {
+      await fetch('https://oauth2.googleapis.com/revoke', { method:'POST', headers:{ 'Content-Type':'application/x-www-form-urlencoded' }, body: 'token='+encodeURIComponent(token) });
+    } catch(_){
+      try { await fetch('https://accounts.google.com/o/oauth2/revoke?token='+encodeURIComponent(token)); } catch(_){ }
+    }
+    if(tokenObj.source === 'identity' && tokenObj.access_token && chrome?.identity?.removeCachedAuthToken){
+      try { await new Promise(r=> chrome.identity.removeCachedAuthToken({ token: tokenObj.access_token }, ()=> r())); } catch(_){ }
+    }
+  }
+  await updateServerConfig(serverId, { token: undefined, oauthMode: undefined });
   return { ok:true };
 }
 

@@ -97,6 +97,8 @@ async function init(){
   els.s_radicale_username = qs('s_radicale_username');
   els.s_radicale_auth = qs('s_radicale_auth');
   els.btnGoogleAuthorize = qs('btnGoogleAuthorize');
+  els.btnGoogleForceConsent = qs('btnGoogleForceConsent');
+  els.btnGoogleRevoke = qs('btnGoogleRevoke');
   els.googleRedirectHint = qs('google_redirect_hint');
   els.googleAuthStatus = qs('googleAuthStatus');
   els.closeServerModal = qs('closeServerModal');
@@ -156,6 +158,8 @@ async function init(){
   els.serverForm?.addEventListener('submit', submitServerForm);
   els.server_type?.addEventListener('change', onServerTypeChange);
   els.btnGoogleAuthorize?.addEventListener('click', onClickGoogleAuthorize);
+  els.btnGoogleForceConsent?.addEventListener('click', ()=> onClickGoogleAuthorize({ forceConsent:true }));
+  els.btnGoogleRevoke?.addEventListener('click', onClickGoogleRevoke);
   els.defaultServerSelect?.addEventListener('change', saveDefaultServerSelection);
   els.defaultParserSelect?.addEventListener('change', saveDefaultParserSelection);
   els.closeTaskModal?.addEventListener('click', closeTaskModal);
@@ -913,10 +917,14 @@ function updateGoogleAuthUI(cfg){
       els.btnGoogleAuthorize.disabled = false;
       els.btnGoogleAuthorize.title = saved ? '' : (els._pendingGoogleConfig ? '已完成授权，可保存' : '未保存节点：可先授权获取令牌，再保存');
       els.btnGoogleAuthorize.style.display = '';
+      if(els.btnGoogleForceConsent){ els.btnGoogleForceConsent.style.display=''; els.btnGoogleForceConsent.disabled=false; }
+      if(els.btnGoogleRevoke){ els.btnGoogleRevoke.style.display=''; els.btnGoogleRevoke.disabled=false; }
     }else{
       els.btnGoogleAuthorize.disabled = true;
       els.btnGoogleAuthorize.title = '';
       els.btnGoogleAuthorize.style.display = 'none';
+      if(els.btnGoogleForceConsent){ els.btnGoogleForceConsent.style.display='none'; }
+      if(els.btnGoogleRevoke){ els.btnGoogleRevoke.style.display='none'; }
     }
   }
   if(!els.googleAuthStatus){
@@ -927,7 +935,11 @@ function updateGoogleAuthUI(cfg){
     return;
   }
   const status = computeGoogleTokenStatus(effectiveCfg);
-  els.googleAuthStatus.textContent = status;
+  const mode = effectiveCfg.oauthMode || effectiveCfg.token?.source || '';
+  els.googleAuthStatus.textContent = mode ? (status + ' · ' + mode) : status;
+  if(els.googleAuthPref && typeof effectiveCfg.authPref === 'string'){
+    try { els.googleAuthPref.value = effectiveCfg.authPref; } catch(_){ /* ignore */ }
+  }
   if(status === '未授权'){
     try {
       const manifest = chrome.runtime.getManifest?.() || {};
@@ -1046,8 +1058,9 @@ function openServerModal(server, all){
   els.s_radicale_base.value = c.base || '';
   els.s_radicale_username.value = c.username || '';
   els.s_radicale_auth.value = c.auth || '';
-  // No Google input fields; values come from dev config/DEFAULTS in runtime code
+  // No Google input fields; values come from manifest/defaults; authPref selectable
   if(els.googleRedirectHint){ els.googleRedirectHint.textContent = `https://${chrome.runtime.id}.chromiumapp.org/`; }
+  if(els.googleAuthPref && c.authPref){ try { els.googleAuthPref.value = c.authPref; } catch(_){ } }
   updateGoogleAuthUI(c);
   els._serversCache = all || null;
   onServerTypeChange();
@@ -1068,8 +1081,9 @@ async function submitServerForm(ev){
   if(type === 'radicale'){
     cfg = { base: (els.s_radicale_base.value||'').trim(), username:(els.s_radicale_username.value||'').trim(), auth:(els.s_radicale_auth.value||'').trim() };
   } else if(type === 'google'){
-    // No user-entered Google fields; rely on packaged config/DEFAULTS at runtime
+    // Include pending token + authPref
     cfg = { ...(els._pendingGoogleConfig || {}) };
+    if(els.googleAuthPref){ cfg.authPref = els.googleAuthPref.value || 'auto'; }
   }
   // common: default calendar name
   const defCal = (els.s_default_calendar_name?.value||'').trim();
@@ -1122,14 +1136,17 @@ function onServerTypeChange(){
   updateGoogleAuthUI(cfg);
 }
 
-async function onClickGoogleAuthorize(){
+async function onClickGoogleAuthorize(opts){
   const type = (els.server_type?.value||'radicale');
   if(type !== 'google') return;
   const savedId = els._editingServerId;
+  const pref = els.googleAuthPref?.value || 'auto';
+  if(!opts?.forceConsent && pref === 'pkce'){ opts = { ...(opts||{}), forceConsent:true }; }
+  if(opts?.forceConsent && pref === 'identity'){ opts.forceConsent = false; }
   if(savedId){
     try {
       if(els.googleAuthStatus) els.googleAuthStatus.textContent = '授权中…';
-      const r = await chrome.runtime.sendMessage({ type:'AUTHORIZE_SERVER', id: savedId });
+      const r = await chrome.runtime.sendMessage({ type:'AUTHORIZE_SERVER', id: savedId, forceConsent: !!opts?.forceConsent });
       if(!r?.ok){
         const msg = r.error||'授权失败';
         if(/client id|clientid|缺少\s*google\s*client\s*id/i.test(msg)){
@@ -1159,6 +1176,7 @@ async function onClickGoogleAuthorize(){
     if(!Array.isArray(baseList)) baseList = await loadServers();
   }catch(_){ baseList = []; }
   const cfg = els._pendingGoogleConfig ? { ...els._pendingGoogleConfig } : {};
+  if(els.googleAuthPref){ cfg.authPref = els.googleAuthPref.value || 'auto'; }
   const defCal = (els.s_default_calendar_name?.value||'').trim();
   if(defCal) cfg.defaultCalendarName = defCal;
   const tempId = 'temp-google-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6);
@@ -1166,7 +1184,7 @@ async function onClickGoogleAuthorize(){
   try {
     await saveServers([...(baseList||[]), tempServer]);
     if(els.googleAuthStatus) els.googleAuthStatus.textContent = '授权中…';
-    const r = await chrome.runtime.sendMessage({ type:'AUTHORIZE_SERVER', id: tempId });
+  const r = await chrome.runtime.sendMessage({ type:'AUTHORIZE_SERVER', id: tempId, forceConsent: !!opts?.forceConsent });
     if(!r?.ok){
       const msg = r.error||'授权失败';
       if(/client id|clientid|缺少\s*google\s*client\s*id/i.test(msg)){
@@ -1181,7 +1199,11 @@ async function onClickGoogleAuthorize(){
         ...tempSaved.config,
         token: tempSaved.config?.token,
         oauthMode: tempSaved.config?.oauthMode,
+        authPref: pref,
       };
+    } else if(pref){
+      // preserve chosen preference even if tempSaved missing
+      els._pendingGoogleConfig = { ...(els._pendingGoogleConfig||{}), authPref: pref };
     }
     // remove temp node from storage
   const cleaned = afterAuth.filter(x=> x.id !== tempId);
@@ -1200,6 +1222,24 @@ async function onClickGoogleAuthorize(){
     els._pendingGoogleConfig = null;
     updateGoogleAuthUI({});
     alert('授权失败: ' + e.message);
+  }
+}
+
+async function onClickGoogleRevoke(){
+  const type = (els.server_type?.value||'radicale'); if(type !== 'google') return;
+  const savedId = els._editingServerId; if(!savedId){ alert('请先保存服务器节点后再撤销'); return; }
+  if(!confirm('确定撤销当前 Google 授权？这将删除本地令牌并尝试远程 revoke。')) return;
+  try {
+    if(els.googleAuthStatus) els.googleAuthStatus.textContent = '撤销中…';
+    const r = await chrome.runtime.sendMessage({ type:'REVOKE_SERVER_AUTH', id: savedId });
+    if(!r?.ok) throw new Error(r.error||'撤销失败');
+    await loadRenderServers();
+    const list = Array.isArray(els._serversCache)? els._serversCache : await loadServers();
+    const current = list.find(x=> x.id === savedId);
+    updateGoogleAuthUI(current?.config || {});
+    alert('授权已撤销');
+  } catch(e){
+    alert('撤销失败: '+ e.message);
   }
 }
 

@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -13,16 +14,63 @@
             --text: #0f172a;
             --muted: #64748b;
         }
-        html, body { height: 100%; }
-        body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif; color: var(--text); background: var(--bg); }
-        .container { max-width: 980px; margin: 0 auto; padding: 18px 16px 40px; }
-        .page-header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom: 14px; }
-        .page-title { display:flex; align-items:center; gap:10px; margin:0; font-size: 22px; letter-spacing:.3px; }
-        .subtle { color: var(--muted); }
-    .header-actions { display:flex; align-items:center; gap:10px; flex-wrap: wrap; }
+
+        html,
+        body {
+            height: 100%;
+        }
+
+        body {
+            margin: 0;
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif;
+            color: var(--text);
+            background: var(--bg);
+        }
+
+        .container {
+            max-width: 980px;
+            margin: 0 auto;
+            padding: 18px 16px 40px;
+        }
+
+        .page-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 14px;
+        }
+
+        .page-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 0;
+            font-size: 22px;
+            letter-spacing: .3px;
+        }
+
+        .subtle {
+            color: var(--muted);
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
         /* Constrain modals and allow scrolling when content is tall */
-        .cal-modal-overlay { overflow: auto; }
-        .cal-modal { max-height: calc(100vh - 120px); overflow: auto; }
+        .cal-modal-overlay {
+            overflow: auto;
+        }
+
+        .cal-modal {
+            max-height: calc(100vh - 120px);
+            overflow: auto;
+        }
+
         fieldset {
             padding: 16px 20px;
             border-radius: 14px;
@@ -61,7 +109,9 @@
             resize: vertical;
         }
 
-        .mono { font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace; }
+        .mono {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        }
 
         .row {
             display: flex;
@@ -89,7 +139,11 @@
         }
 
         /* unified small button size */
-        .sm { padding: 6px 12px; font-size: 12px; border-radius: 8px; }
+        .sm {
+            padding: 6px 12px;
+            font-size: 12px;
+            border-radius: 8px;
+        }
 
         .actions {
             display: flex;
@@ -106,11 +160,40 @@
         }
 
         /* Toggle cards for nicer trigger layout */
-        .toggle-group { display:grid; grid-template-columns: 1fr; gap: 10px; }
-        @media (min-width: 720px){ .toggle-group { grid-template-columns: 1fr 1fr; } }
-        .toggle-card { border:1px solid var(--border); background:#fff; border-radius: 12px; padding: 12px; display:flex; flex-direction:column; gap:10px; }
-        .toggle-head { display:flex; align-items:center; gap:10px; font-size:13px; font-weight:600; color:#0f172a; }
-        .muted { color: var(--muted); }
+        .toggle-group {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+        }
+
+        @media (min-width: 720px) {
+            .toggle-group {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+
+        .toggle-card {
+            border: 1px solid var(--border);
+            background: #fff;
+            border-radius: 12px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .toggle-head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #0f172a;
+        }
+
+        .muted {
+            color: var(--muted);
+        }
 
         .badge {
             display: inline-block;
@@ -121,12 +204,35 @@
             font-size: 12px;
             margin-left: 8px
         }
-        .card { border:1px solid var(--border); border-radius: 12px; background: var(--card); padding: 10px 12px; }
-        .card-head { display:flex; align-items:center; justify-content:flex-end; gap:8px; margin-bottom: 6px; }
-        .grid { display:grid; grid-template-columns: 1fr; gap: 16px; }
-        @media (min-width: 860px) { .grid { grid-template-columns: 1fr 1fr; } }
+
+        .card {
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: var(--card);
+            padding: 10px 12px;
+        }
+
+        .card-head {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 16px;
+        }
+
+        @media (min-width: 860px) {
+            .grid {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
     </style>
-    
+
 </head>
 
 <body>
@@ -140,12 +246,13 @@
         </div>
 
         <!-- 权限提示栏（缺少可选 host 权限时显示） -->
-        <div id="permBanner" style="display:none;margin:12px 0;padding:10px 12px;border:1px dashed #eab308;background:#fffbeb;border-radius:10px;color:#854d0e;font-size:13px">
+        <div id="permBanner"
+            style="display:none;margin:12px 0;padding:10px 12px;border:1px dashed #eab308;background:#fffbeb;border-radius:10px;color:#854d0e;font-size:13px">
             发现有新配置的服务器或解析服务需要访问权限。为保证正常联网，请点击
             <button id="btnAuthorizeMissing" class="primary sm" style="margin:0 6px">立即授权</button>
             。
         </div>
-    
+
         <fieldset>
             <legend>上传节点（日历服务器）</legend>
             <div class="card">
@@ -153,13 +260,14 @@
                     <button id="addServer" type="button" class="primary sm">新增</button>
                 </div>
                 <div id="serversEmpty" style="font-size:12px;color:#666">暂无服务器节点，点击“新增”创建。</div>
-                <ul id="serverList" style="list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:8px"></ul>
+                <ul id="serverList"
+                    style="list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:8px"></ul>
                 <div style="margin-top:8px;font-size:13px">默认服务器：
                     <select id="defaultServerSelect" style="min-width:200px"></select>
                 </div>
             </div>
         </fieldset>
-    
+
         <fieldset>
             <legend>解析节点</legend>
             <div class="card">
@@ -167,52 +275,64 @@
                     <button id="addParser" type="button" class="primary sm">新增</button>
                 </div>
                 <div id="parsersEmpty" style="font-size:12px;color:#666">暂无解析节点，点击“新增”创建。</div>
-                <ul id="parserList" style="list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:8px"></ul>
+                <ul id="parserList"
+                    style="list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:8px"></ul>
                 <div style="margin-top:8px;font-size:13px">默认解析节点：
                     <select id="defaultParserSelect" style="min-width:200px"></select>
                 </div>
             </div>
         </fieldset>
-    <fieldset>
-        <legend>任务列表</legend>
-        <div class="card">
-            <div class="card-head">
-                <button id="runAllTasks" type="button" class="ghost sm" title="运行所有已启用的任务">运行所有任务</button>
-                <button id="addPageTask" type="button" class="primary sm">新增任务</button>
+        <fieldset>
+            <legend>任务列表</legend>
+            <div class="card">
+                <div class="card-head">
+                    <button id="runAllTasks" type="button" class="ghost sm" title="运行所有已启用的任务">运行所有任务</button>
+                    <button id="addPageTask" type="button" class="primary sm">新增任务</button>
+                </div>
+                <div id="pageTasksEmpty" style="font-size:12px;color:#666">暂无任务，点击“新增任务”创建。</div>
+                <ul id="pageTaskList"
+                    style="list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:8px"></ul>
             </div>
-            <div id="pageTasksEmpty" style="font-size:12px;color:#666">暂无任务，点击“新增任务”创建。</div>
-            <ul id="pageTaskList" style="list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:8px"></ul>
-        </div>
-    </fieldset>
-    <!-- 操作区合并到页头；去除“立即同步”和“最后同步”显示 -->
-    <script type="module" src="src/options.js"></script>
+        </fieldset>
+        <!-- 操作区合并到页头；去除“立即同步”和“最后同步”显示 -->
+        <script type="module" src="src/options.js"></script>
 
         <!-- 新版任务编辑模态 (V3) -->
-        <div id="taskModal" class="cal-modal-overlay" style="position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:flex-start;justify-content:center;padding:60px 20px;z-index:9999;backdrop-filter:blur(2px)">
-            <div class="cal-modal" style="width:640px;max-width:100%;background:#fff;border-radius:18px;padding:22px 26px;box-shadow:0 6px 34px -8px rgba(0,0,0,.35);display:flex;flex-direction:column;gap:18px;border:1px solid #e6edf5">
+        <div id="taskModal" class="cal-modal-overlay"
+            style="position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:flex-start;justify-content:center;padding:60px 20px;z-index:9999;backdrop-filter:blur(2px)">
+            <div class="cal-modal"
+                style="width:640px;max-width:100%;background:#fff;border-radius:18px;padding:22px 26px;box-shadow:0 6px 34px -8px rgba(0,0,0,.35);display:flex;flex-direction:column;gap:18px;border:1px solid #e6edf5">
                 <div style="display:flex;align-items:center;justify-content:space-between">
-                    <h2 style="margin:0;font-size:18px;font-weight:650;letter-spacing:.5px;color:#0f172a" id="taskModalTitle">任务</h2>
-                    <button id="closeTaskModal" type="button" style="background:#f1f5f9;border:1px solid #d8e2ed;border-radius:8px;padding:6px 14px;cursor:pointer;font-size:13px;font-weight:600;color:#334155">关闭</button>
+                    <h2 style="margin:0;font-size:18px;font-weight:650;letter-spacing:.5px;color:#0f172a"
+                        id="taskModalTitle">任务</h2>
+                    <button id="closeTaskModal" type="button"
+                        style="background:#f1f5f9;border:1px solid #d8e2ed;border-radius:8px;padding:6px 14px;cursor:pointer;font-size:13px;font-weight:600;color:#334155">关闭</button>
                 </div>
                 <form id="taskForm" style="display:flex;flex-direction:column;gap:18px">
-                    <fieldset class="cal-fieldset" style="border:1px solid #e1e8f0;padding:16px 18px;border-radius:14px;margin:0;display:flex;flex-direction:column;gap:14px;background:#fafcff">
+                    <fieldset class="cal-fieldset"
+                        style="border:1px solid #e1e8f0;padding:16px 18px;border-radius:14px;margin:0;display:flex;flex-direction:column;gap:14px;background:#fafcff">
                         <legend style="padding:0 8px;font-size:13px;font-weight:600;color:#0f172a">任务与触发设置</legend>
                         <div class="row" style="gap:20px;align-items:flex-start">
                             <label style="flex:1;min-width:180px">任务名称
                                 <input id="task_name" type="text" required style="margin-top:4px">
                             </label>
                             <label style="flex:0.6;min-width:120px">启用
-                                <select id="task_enabled" style="margin-top:4px"><option value="true">是</option><option value="false">否</option></select>
+                                <select id="task_enabled" style="margin-top:4px">
+                                    <option value="true">是</option>
+                                    <option value="false">否</option>
+                                </select>
                             </label>
                         </div>
                         <div class="toggle-group">
                             <div class="toggle-card">
                                 <div class="toggle-head">
                                     <input type="checkbox" id="task_useInterval">
-                                    <label for="task_useInterval" style="margin:0; gap:8px; display:flex; align-items:center; font-weight:600">周期(分钟)</label>
+                                    <label for="task_useInterval"
+                                        style="margin:0; gap:8px; display:flex; align-items:center; font-weight:600">周期(分钟)</label>
                                 </div>
                                 <div style="display:flex; align-items:center; gap:10px; margin-top:2px">
-                                    <input id="task_interval" type="number" min="1" placeholder="间隔分钟" style="width:140px">
+                                    <input id="task_interval" type="number" min="1" placeholder="间隔分钟"
+                                        style="width:140px">
                                     <span class="muted" style="font-size:12px">当启用时，按固定间隔触发</span>
                                 </div>
                             </div>
@@ -221,11 +341,14 @@
                                     <input type="checkbox" id="task_useTimes">
                                     <label for="task_useTimes" style="margin:0; font-weight:600">指定时间点(HH:mm)</label>
                                 </div>
-                                <div id="schedule_times_wrap" style="display:none;flex-direction:column;gap:10px;margin-top:4px">
+                                <div id="schedule_times_wrap"
+                                    style="display:none;flex-direction:column;gap:10px;margin-top:4px">
                                     <div id="task_times_list" style="display:flex;gap:8px;flex-wrap:wrap"></div>
                                     <div style="display:flex;gap:10px;flex-wrap:wrap">
-                                        <input id="task_time_input" type="text" placeholder="HH:mm" style="flex:1;min-width:140px">
-                                        <button type="button" id="task_time_add" class="sm primary" style="padding:8px 12px;border-radius:8px">添加时间点</button>
+                                        <input id="task_time_input" type="text" placeholder="HH:mm"
+                                            style="flex:1;min-width:140px">
+                                        <button type="button" id="task_time_add" class="sm primary"
+                                            style="padding:8px 12px;border-radius:8px">添加时间点</button>
                                     </div>
                                     <div class="note" style="margin:0">触发后自动排入下一天同一时间；例如 08:30 / 14:05</div>
                                 </div>
@@ -235,9 +358,11 @@
                                     <input type="checkbox" id="task_visitTrigger">
                                     <label for="task_visitTrigger" style="margin:0; font-weight:600">访问页面触发</label>
                                 </div>
-                                <div id="visit_patterns_wrap" style="display:none;flex-direction:column;gap:6px;margin-top:4px">
+                                <div id="visit_patterns_wrap"
+                                    style="display:none;flex-direction:column;gap:6px;margin-top:4px">
                                     <label style="margin:0">匹配前缀（每行一条，留空则默认使用目标 URL）
-                                        <textarea id="task_visitPatterns" class="mono" style="margin-top:6px;height:68px" placeholder="https://my.sjtu.edu.cn/ui/calendar
+                                        <textarea id="task_visitPatterns" class="mono"
+                                            style="margin-top:6px;height:68px" placeholder="https://my.sjtu.edu.cn/ui/calendar
 https://calendar.sjtu.edu.cn/..."></textarea>
                                     </label>
                                     <div class="note" style="margin:0">仅主框架导航触发；按 origin+pathname 前缀匹配，忽略 query。</div>
@@ -246,7 +371,8 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                         </div>
                     </fieldset>
 
-                    <fieldset style="border:1px solid #e1e8f0;padding:16px 18px;border-radius:14px;margin:0;display:flex;flex-direction:column;gap:14px;background:#fafcff">
+                    <fieldset
+                        style="border:1px solid #e1e8f0;padding:16px 18px;border-radius:14px;margin:0;display:flex;flex-direction:column;gap:14px;background:#fafcff">
                         <legend style="padding:0 8px;font-size:13px;font-weight:600;color:#0f172a">数据获取</legend>
                         <div style="display:flex;flex-direction:column;gap:14px">
                             <label style="width:220px;font-size:13px">模式
@@ -259,27 +385,34 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                                 <label>目标 URL
                                     <input id="task_url" type="text" placeholder="https://..." style="margin-top:4px">
                                 </label>
-                                <fieldset class="card" style="border:1px solid var(--border);background:#fff;border-radius:12px;padding:10px 12px">
-                                    <legend style="padding:0 6px;font-size:12px;color:#0f172a">预热访问（先打开页面以刷新登录状态/Cookie）</legend>
+                                <fieldset class="card"
+                                    style="border:1px solid var(--border);background:#fff;border-radius:12px;padding:10px 12px">
+                                    <legend style="padding:0 6px;font-size:12px;color:#0f172a">预热访问（先打开页面以刷新登录状态/Cookie）
+                                    </legend>
                                     <div style="display:flex;flex-direction:column;gap:10px">
                                         <label>预热访问 URL（可选）
-                                            <input id="task_warmupUrl" type="text" placeholder="https://... (先访问此页再抓取上面的目标 URL)" style="margin-top:4px">
+                                            <input id="task_warmupUrl" type="text"
+                                                placeholder="https://... (先访问此页再抓取上面的目标 URL)" style="margin-top:4px">
                                         </label>
                                         <div class="row" style="gap:12px;align-items:center">
-                                            <label style="flex:0 0 auto; margin:0; gap:8px; display:flex; align-items:center">
+                                            <label
+                                                style="flex:0 0 auto; margin:0; gap:8px; display:flex; align-items:center">
                                                 <input id="task_warmupSilent" type="checkbox" checked>
                                                 <span>静默打开（后台标签）</span>
                                             </label>
                                             <label style="flex:0 0 220px; margin:0">等待时长(毫秒)
-                                                <input id="task_warmupWaitMs" type="number" min="0" placeholder="0 (可选额外等待)" style="margin-top:4px">
+                                                <input id="task_warmupWaitMs" type="number" min="0"
+                                                    placeholder="0 (可选额外等待)" style="margin-top:4px">
                                             </label>
                                         </div>
-                                        <div class="note" style="margin:0">说明：若填写将先在后台打开该页面，等待加载完成（或超时），可选再延迟一段时间，随后执行 GET 抓取并关闭标签。</div>
+                                        <div class="note" style="margin:0">说明：若填写将先在后台打开该页面，等待加载完成（或超时），可选再延迟一段时间，随后执行
+                                            GET 抓取并关闭标签。</div>
                                     </div>
                                 </fieldset>
                                 <!-- 解析方式由解析节点决定，移除此处的显式选择 -->
                                 <label id="task_jsonPaths_wrap" style="display:block">JSON 路径
-                                    <textarea id="task_jsonPaths" class="mono" style="margin-top:6px;height:56px" placeholder="例如：data.events[*]"></textarea>
+                                    <textarea id="task_jsonPaths" class="mono" style="margin-top:6px;height:56px"
+                                        placeholder="例如：data.events[*]"></textarea>
                                 </label>
                                 <div class="note" style="margin:0;line-height:1.55">
                                     说明：对JSON格式的返回结果进行部分内容输入到解析节点进行解析。支持多级嵌套和数据索引。<br>
@@ -287,11 +420,13 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                                 </div>
                             </div>
                             <div id="modePanel_SJTU_JWB" style="display:none;flex-direction:column;gap:14px">
-                                <div class="note" style="margin:0;line-height:1.5;color:#475569">交我办模式：自动预热访问门户，再抓取校历接口 <code>calendar.sjtu.edu.cn</code> 返回的事件列表。</div>
+                                <div class="note" style="margin:0;line-height:1.5;color:#475569">交我办模式：自动预热访问门户，再抓取校历接口
+                                    <code>calendar.sjtu.edu.cn</code> 返回的事件列表。</div>
                                 <label style="width:200px">时间窗口天数（前后）
-                                    <input id="task_jwb_windowDays" type="number" min="1" max="90" value="14" style="margin-top:4px">
+                                    <input id="task_jwb_windowDays" type="number" min="1" max="90" value="14"
+                                        style="margin-top:4px">
                                 </label>
-                                <label style="display:flex;flex-direction:row;align-items:center;gap:8px;margin:0"> 
+                                <label style="display:flex;flex-direction:row;align-items:center;gap:8px;margin:0">
                                     <input id="task_jwb_coverage" type="checkbox"> 启用覆盖模式
                                 </label>
                                 <div class="note" style="margin-top:0;line-height:1.5">
@@ -302,36 +437,45 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                         </div>
                     </fieldset>
 
-                    <fieldset style="border:1px solid #e1e8f0;padding:16px 18px;border-radius:14px;margin:0;display:flex;flex-direction:column;gap:14px;background:#fafcff">
+                    <fieldset
+                        style="border:1px solid #e1e8f0;padding:16px 18px;border-radius:14px;margin:0;display:flex;flex-direction:column;gap:14px;background:#fafcff">
                         <legend style="padding:0 8px;font-size:13px;font-weight:600;color:#0f172a">解析节点</legend>
                         <label style="width:260px">解析节点（可选）
                             <select id="task_parserId" style="margin-top:4px"></select>
                         </label>
                     </fieldset>
 
-                    <fieldset style="border:1px solid #e1e8f0;padding:16px 18px;border-radius:14px;margin:0;display:flex;flex-direction:column;gap:14px;background:#fafcff">
+                    <fieldset
+                        style="border:1px solid #e1e8f0;padding:16px 18px;border-radius:14px;margin:0;display:flex;flex-direction:column;gap:14px;background:#fafcff">
                         <legend style="padding:0 8px;font-size:13px;font-weight:600;color:#0f172a">上传目标</legend>
                         <label style="width:260px">上传服务器
                             <select id="task_serverId" style="margin-top:4px"></select>
                         </label>
                         <label style="flex:1;min-width:180px">目标日历名称
-                            <input id="task_calendarName" type="text" placeholder="如 SJTU日历" required style="margin-top:4px">
+                            <input id="task_calendarName" type="text" placeholder="如 SJTU日历" required
+                                style="margin-top:4px">
                         </label>
                     </fieldset>
                     <div style="display:flex;gap:14px;justify-content:flex-end;margin-top:4px">
-                        <button type="button" id="taskRunOnce" style="background:#fff;border:1px solid #d4dbe6;padding:10px 22px;border-radius:10px;font-weight:600;cursor:pointer;color:#0f172a">试运行</button>
-                        <button type="submit" style="background:#0b74de;color:#fff;border:none;padding:10px 28px;border-radius:10px;font-weight:600;cursor:pointer;box-shadow:0 2px 4px rgba(0,0,0,.15)">保存</button>
+                        <button type="button" id="taskRunOnce"
+                            style="background:#fff;border:1px solid #d4dbe6;padding:10px 22px;border-radius:10px;font-weight:600;cursor:pointer;color:#0f172a">试运行</button>
+                        <button type="submit"
+                            style="background:#0b74de;color:#fff;border:none;padding:10px 28px;border-radius:10px;font-weight:600;cursor:pointer;box-shadow:0 2px 4px rgba(0,0,0,.15)">保存</button>
                     </div>
                 </form>
             </div>
         </div>
 
         <!-- 解析节点编辑模态 -->
-        <div id="parserModal" class="cal-modal-overlay" style="position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:flex-start;justify-content:center;padding:60px 20px;z-index:9999;backdrop-filter:blur(2px)">
-            <div class="cal-modal" style="width:560px;max-width:100%;background:#fff;border-radius:18px;padding:22px 26px;box-shadow:0 6px 34px -8px rgba(0,0,0,.35);display:flex;flex-direction:column;gap:18px;border:1px solid #e6edf5">
+        <div id="parserModal" class="cal-modal-overlay"
+            style="position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:flex-start;justify-content:center;padding:60px 20px;z-index:9999;backdrop-filter:blur(2px)">
+            <div class="cal-modal"
+                style="width:560px;max-width:100%;background:#fff;border-radius:18px;padding:22px 26px;box-shadow:0 6px 34px -8px rgba(0,0,0,.35);display:flex;flex-direction:column;gap:18px;border:1px solid #e6edf5">
                 <div style="display:flex;align-items:center;justify-content:space-between">
-                    <h2 style="margin:0;font-size:18px;font-weight:650;letter-spacing:.5px;color:#0f172a" id="parserModalTitle">解析节点</h2>
-                    <button id="closeParserModal" type="button" style="background:#f1f5f9;border:1px solid #d8e2ed;border-radius:8px;padding:6px 14px;cursor:pointer;font-size:13px;font-weight:600;color:#334155">关闭</button>
+                    <h2 style="margin:0;font-size:18px;font-weight:650;letter-spacing:.5px;color:#0f172a"
+                        id="parserModalTitle">解析节点</h2>
+                    <button id="closeParserModal" type="button"
+                        style="background:#f1f5f9;border:1px solid #d8e2ed;border-radius:8px;padding:6px 14px;cursor:pointer;font-size:13px;font-weight:600;color:#334155">关闭</button>
                 </div>
                 <form id="parserForm" style="display:flex;flex-direction:column;gap:12px">
                     <label>名称<input id="parser_name" type="text" required></label>
@@ -345,9 +489,11 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                         </select>
                     </label>
                     <div id="parser_panel_zhipu" style="display:flex;flex-direction:column;gap:10px">
-                        <label>API URL<input id="p_zhipu_apiUrl" type="text" placeholder="https://open.bigmodel.cn/api/llm-application/open/v3/application/invoke" /></label>
+                        <label>API URL<input id="p_zhipu_apiUrl" type="text"
+                                placeholder="https://open.bigmodel.cn/api/llm-application/open/v3/application/invoke" /></label>
                         <label>API Key<input id="p_zhipu_apiKey" type="text" placeholder="Bearer ..." /></label>
-                        <label>Agent ID<input id="p_zhipu_agentId" type="text" placeholder="1954810625930809344" /></label>
+                        <label>Agent ID<input id="p_zhipu_agentId" type="text"
+                                placeholder="1954810625930809344" /></label>
                     </div>
                     <div id="parser_panel_chatgpt" style="display:none;flex-direction:column;gap:10px">
                         <label>API Key<input id="p_chatgpt_apiKey" type="text" placeholder="sk-..." /></label>
@@ -363,37 +509,53 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                     </div>
                     <div id="parser_panel_bailian" style="display:none;flex-direction:column;gap:10px">
                         <label>API Key<input id="p_bailian_apiKey" type="text" placeholder="sk-..." /></label>
-                        <label>App ID<input id="p_bailian_agentId" type="text" placeholder="1ca80897bf214db08d43654aa2264f3d" /></label>
-                        <div class="note">阿里百炼 App：调用 <code>https://dashscope.aliyuncs.com/api/v1/apps/{app_id}/completion</code>，仅需 API Key 与 App ID（可用默认）。请通过“授权”允许 <code>dashscope.aliyuncs.com</code>。</div>
+                        <label>App ID<input id="p_bailian_agentId" type="text"
+                                placeholder="1ca80897bf214db08d43654aa2264f3d" /></label>
+                        <div class="note">阿里百炼 App：调用
+                            <code>https://dashscope.aliyuncs.com/api/v1/apps/{app_id}/completion</code>，仅需 API Key 与 App
+                            ID（可用默认）。请通过“授权”允许 <code>dashscope.aliyuncs.com</code>。</div>
                     </div>
                     <div id="parser_panel_jsonmap" style="display:none;flex-direction:column;gap:10px">
                         <div style="font-size:12px;color:#475569;line-height:1.6">
                             将 JSON 列表字段映射到标准 iCalendar 属性，解析节点会据此直接生成可上传的 ICS 文件。
                         </div>
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-                            <label>SUMMARY (事件标题) 对应字段<input id="p_json_map_title" type="text" placeholder="title,summary,name" /></label>
-                            <label>LOCATION 对应字段<input id="p_json_map_location" type="text" placeholder="location,place" /></label>
-                            <label>DTSTART (开始时间) 对应字段<input id="p_json_map_startTime" type="text" placeholder="startTime,begin,start" /></label>
-                            <label>DTEND (结束时间) 对应字段<input id="p_json_map_endTime" type="text" placeholder="endTime,finish,end" /></label>
-                            <label>UID 对应字段<input id="p_json_map_uid" type="text" placeholder="uid,id,eventId" /></label>
-                            <label>DESCRIPTION 对应字段<input id="p_json_map_description" type="text" placeholder="description,desc,detail" /></label>
+                            <label>SUMMARY (事件标题) 对应字段<input id="p_json_map_title" type="text"
+                                    placeholder="title,summary,name" /></label>
+                            <label>LOCATION 对应字段<input id="p_json_map_location" type="text"
+                                    placeholder="location,place" /></label>
+                            <label>DTSTART (开始时间) 对应字段<input id="p_json_map_startTime" type="text"
+                                    placeholder="startTime,begin,start" /></label>
+                            <label>DTEND (结束时间) 对应字段<input id="p_json_map_endTime" type="text"
+                                    placeholder="endTime,finish,end" /></label>
+                            <label>UID 对应字段<input id="p_json_map_uid" type="text"
+                                    placeholder="uid,id,eventId" /></label>
+                            <label>DESCRIPTION 对应字段<input id="p_json_map_description" type="text"
+                                    placeholder="description,desc,detail" /></label>
                         </div>
                         <fieldset style="border:1px solid #e1e8f0;padding:12px;border-radius:10px;background:#f8fafc">
                             <legend style="padding:0 6px;font-size:12px;color:#0f172a">默认值(当字段缺失时使用)</legend>
                             <div class="row" style="gap:10px;flex-wrap:wrap">
-                                <label style="min-width:180px">标题默认值<input id="p_json_def_title" type="text" placeholder="(可选)" /></label>
-                                <label style="min-width:180px">地点默认值<input id="p_json_def_location" type="text" placeholder="(可选)" /></label>
-                                <label style="min-width:180px">开始时间默认值<input id="p_json_def_startTime" type="text" placeholder="(可选)" /></label>
-                                <label style="min-width:180px">结束时间默认值<input id="p_json_def_endTime" type="text" placeholder="(可选)" /></label>
-                                <label style="min-width:180px">UID 默认值<input id="p_json_def_uid" type="text" placeholder="auto | 固定字符串" /></label>
-                                <label style="min-width:180px">描述默认值<input id="p_json_def_description" type="text" placeholder="(可选)" /></label>
+                                <label style="min-width:180px">标题默认值<input id="p_json_def_title" type="text"
+                                        placeholder="(可选)" /></label>
+                                <label style="min-width:180px">地点默认值<input id="p_json_def_location" type="text"
+                                        placeholder="(可选)" /></label>
+                                <label style="min-width:180px">开始时间默认值<input id="p_json_def_startTime" type="text"
+                                        placeholder="(可选)" /></label>
+                                <label style="min-width:180px">结束时间默认值<input id="p_json_def_endTime" type="text"
+                                        placeholder="(可选)" /></label>
+                                <label style="min-width:180px">UID 默认值<input id="p_json_def_uid" type="text"
+                                        placeholder="auto | 固定字符串" /></label>
+                                <label style="min-width:180px">描述默认值<input id="p_json_def_description" type="text"
+                                        placeholder="(可选)" /></label>
                             </div>
                             <div class="note">UID 默认值填 <code>auto</code> 时将自动生成；留空则当字段缺失时跳过。</div>
                         </fieldset>
                         <div style="font-size:12px;color:#64748b">时间字段支持多种格式，节点会自动转为符合 iCalendar 的 DTSTART/DTEND。</div>
                     </div>
                     <div id="parser_panel_jiaowoban" style="display:none;flex-direction:column;gap:10px">
-                        <div class="note" style="margin:0;font-size:12px;line-height:1.55;color:#475569">交我办专用解析：输入应为接口 JSON，包含 <code>data.events</code> 列表。可选自定义字段映射，不填写使用默认字段。</div>
+                        <div class="note" style="margin:0;font-size:12px;line-height:1.55;color:#475569">交我办专用解析：输入应为接口
+                            JSON，包含 <code>data.events</code> 列表。可选自定义字段映射，不填写使用默认字段。</div>
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
                             <label>标题字段列表<input id="p_jwb_title" type="text" placeholder="title" /></label>
                             <label>开始时间字段<input id="p_jwb_startTime" type="text" placeholder="startTime" /></label>
@@ -404,17 +566,22 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                         </div>
                         <div class="note" style="margin-top:-4px">多个字段用逗号分隔；留空用默认。</div>
                     </div>
-                    <div style="display:flex;gap:10px;justify-content:flex-end"><button type="submit" class="primary">保存</button></div>
+                    <div style="display:flex;gap:10px;justify-content:flex-end"><button type="submit"
+                            class="primary">保存</button></div>
                 </form>
             </div>
         </div>
 
         <!-- 服务器节点编辑模态 -->
-        <div id="serverModal" class="cal-modal-overlay" style="position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:flex-start;justify-content:center;padding:60px 20px;z-index:9999;backdrop-filter:blur(2px)">
-            <div class="cal-modal" style="width:560px;max-width:100%;background:#fff;border-radius:18px;padding:22px 26px;box-shadow:0 6px 34px -8px rgba(0,0,0,.35);display:flex;flex-direction:column;gap:18px;border:1px solid #e6edf5">
+        <div id="serverModal" class="cal-modal-overlay"
+            style="position:fixed;inset:0;background:rgba(15,23,42,.45);display:none;align-items:flex-start;justify-content:center;padding:60px 20px;z-index:9999;backdrop-filter:blur(2px)">
+            <div class="cal-modal"
+                style="width:560px;max-width:100%;background:#fff;border-radius:18px;padding:22px 26px;box-shadow:0 6px 34px -8px rgba(0,0,0,.35);display:flex;flex-direction:column;gap:18px;border:1px solid #e6edf5">
                 <div style="display:flex;align-items:center;justify-content:space-between">
-                    <h2 style="margin:0;font-size:18px;font-weight:650;letter-spacing:.5px;color:#0f172a" id="serverModalTitle">服务器节点</h2>
-                    <button id="closeServerModal" type="button" style="background:#f1f5f9;border:1px solid #d8e2ed;border-radius:8px;padding:6px 14px;cursor:pointer;font-size:13px;font-weight:600;color:#334155">关闭</button>
+                    <h2 style="margin:0;font-size:18px;font-weight:650;letter-spacing:.5px;color:#0f172a"
+                        id="serverModalTitle">服务器节点</h2>
+                    <button id="closeServerModal" type="button"
+                        style="background:#f1f5f9;border:1px solid #d8e2ed;border-radius:8px;padding:6px 14px;cursor:pointer;font-size:13px;font-weight:600;color:#334155">关闭</button>
                 </div>
                 <form id="serverForm" style="display:flex;flex-direction:column;gap:12px">
                     <label>名称<input id="server_name" type="text" required></label>
@@ -424,20 +591,36 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                             <option value="google">Google 日历</option>
                         </select>
                     </label>
-                    <label>默认日历名称（文件）<input id="s_default_calendar_name" type="text" placeholder="如 Work 或 SJTU-Account"></label>
+                    <label>默认日历名称（文件）<input id="s_default_calendar_name" type="text"
+                            placeholder="如 Work 或 SJTU-Account"></label>
                     <div id="server_panel_radicale" style="display:flex;flex-direction:column;gap:10px">
-                        <label>Base URL<input id="s_radicale_base" type="text" placeholder="http://127.0.0.1:5232" /></label>
+                        <label>Base URL<input id="s_radicale_base" type="text"
+                                placeholder="http://127.0.0.1:5232" /></label>
                         <label>用户名<input id="s_radicale_username" type="text" placeholder="user" /></label>
-                        <label>Authorization(可选)<input id="s_radicale_auth" type="text" placeholder="Basic ..." /></label>
+                        <label>Authorization(可选)<input id="s_radicale_auth" type="text"
+                                placeholder="Basic ..." /></label>
                     </div>
-                                        <div id="server_panel_google" style="display:none;flex-direction:column;gap:10px">
-                                                <div class="note">已启用内置开发配置：新增 Google 节点无需填写 Client ID/Calendar ID。授权前请在 Google Cloud 控制台将重定向 URI 添加为：<code id="google_redirect_hint"></code></div>
-                                                <div style="display:flex;gap:10px;align-items:center">
-                                                    <button id="btnGoogleAuthorize" type="button" class="ghost">Google 授权</button>
-                                                    <span id="googleAuthStatus" style="font-size:12px;color:#64748b"></span>
-                                                </div>
-                                        </div>
-                    <div style="display:flex;gap:10px;justify-content:flex-end"><button type="submit" class="primary">保存</button></div>
+                    <div id="server_panel_google" style="display:none;flex-direction:column;gap:10px">
+                        <div class="note" style="line-height:1.55">
+                            授权说明：此扩展需要访问你的 Google 日历以创建 / 更新事件。点击下方“同意页授权”可打开 Google OAuth 同意页。
+                            <br>同意页包含的敏感范围 (Scopes)：
+                            <ul style="margin:6px 0 4px 16px;padding:0;font-size:11px;line-height:1.5;list-style:disc">
+                                <li><code>.../auth/calendar</code>：查看、修改、共享以及永久删除你可访问的所有日历</li>
+                                <li><code>.../auth/calendar.events</code>：查看和修改你在所有日历上的活动</li>
+                            </ul>
+                            数据用途：仅用于把你在本扩展中解析/创建的事件写入选定日历，或列出现有事件以进行去重与差异更新；不上传到第三方服务器。
+                        </div>
+                        <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+                            <button id="btnGoogleAuthorize" type="button" class="ghost" 
+                                title="使用浏览器身份快速授权" >快速授权/刷新</button>
+                            <button id="btnGoogleForceConsent" type="button" class="ghost"
+                                title="清除令牌并走标准 OAuth PKCE 流">PKCE授权</button>
+                            <button id="btnGoogleRevoke" type="button" class="ghost" title="撤销当前授权并清除本地令牌">撤销授权</button>
+                            <span id="googleAuthStatus" style="font-size:12px;color:#64748b;min-width:160px"></span>
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:10px;justify-content:flex-end"><button type="submit"
+                            class="primary">保存</button></div>
                 </form>
             </div>
         </div>
@@ -470,11 +653,14 @@ https://calendar.sjtu.edu.cn/..."></textarea>
                     <option value="jwb">jwb</option>
                 </select>
                 <label style="margin-left:12px">任务</label>
-                <input id="log-task-filter" type="text" placeholder="名称包含..." style="padding:4px 6px;font-size:12px;width:140px" />
+                <input id="log-task-filter" type="text" placeholder="名称包含..."
+                    style="padding:4px 6px;font-size:12px;width:140px" />
                 <button id="btn-refresh-logs">刷新</button>
                 <button id="btn-clear-logs">清空</button>
             </div>
-            <div id="logs-container" style="max-height: 300px; overflow: auto; border: 1px solid #ccc; border-radius: 4px; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size: 12px; background: #fafafa;"></div>
+            <div id="logs-container"
+                style="max-height: 300px; overflow: auto; border: 1px solid #ccc; border-radius: 4px; padding: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size: 12px; background: #fafafa;">
+            </div>
         </section>
     </div>
 </body>
