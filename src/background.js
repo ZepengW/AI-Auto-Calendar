@@ -684,14 +684,24 @@ async function runPageParseOnce(url, calendarName){
     // 看起来像 JSON：仍交给 LLM，保持现有策略
   }
   if(parsedEvents){
-    const { total } = await uploadWithSelectedServer(parsedEvents, calendarName || 'PAGE-PARSED', settings.selectedServerId);
-    notifyAll(`页面(JSON)解析完成: 新增 ${parsedEvents.length} 条（合并后总 ${total} 条）`);
-    return { added: parsedEvents.length, total, json: true };
+    const targetName = calendarName || 'PAGE-PARSED';
+    const uploadInfo = await uploadWithSelectedServer(parsedEvents, targetName, settings.selectedServerId);
+    const summary = summarizeUploadResult(uploadInfo, parsedEvents.length);
+    notifyAll(`页面(JSON)解析完成(${targetName}): 新增 ${summary.added} 条（合并后总 ${summary.total} 条）`);
+    return { calendarName: targetName, json: true, ...uploadInfo, ...summary };
   }
-  const events = await parseTextViaLLM(text);
-  const { total } = await uploadWithSelectedServer(events, calendarName || 'PAGE-PARSED', settings.selectedServerId);
-  notifyAll(`页面解析完成: 新增 ${events.length} 条（合并后总 ${total} 条）`);
-  return { added: events.length, total };
+  const payload = await parseTextViaLLM(text, calendarName);
+  const events = Array.isArray(payload?.events) ? payload.events : [];
+  const targetName = payload?.calendarName || calendarName || 'PAGE-PARSED';
+  const uploadInfo = await uploadWithSelectedServer(
+    events,
+    targetName,
+    settings.selectedServerId,
+    { icsText: payload?.icsText, rawIcsText: payload?.rawIcsText }
+  );
+  const summary = summarizeUploadResult(uploadInfo, events.length);
+  notifyAll(`页面解析完成(${targetName}): 新增 ${summary.added} 条（合并后总 ${summary.total} 条）`);
+  return { calendarName: targetName, ...uploadInfo, ...summary };
 }
 
 // -----------------------------
@@ -800,6 +810,16 @@ function sanitizeNewTasks(tasks){
   }).filter(t => t.mode === 'SJTU_JWB' ? true : t.modeConfig.url);
 }
 
+function summarizeUploadResult(uploadResult = {}, fetchedCount = 0){
+  const inserted = Number(uploadResult.inserted ?? uploadResult.added ?? 0) || 0;
+  const updated = Number(uploadResult.updated ?? 0) || 0;
+  const deleted = Number(uploadResult.deleted ?? 0) || 0;
+  const skipped = Number(uploadResult.skipped ?? 0) || 0;
+  const total = Number(uploadResult.total ?? 0) || 0;
+  const coverage = !!uploadResult.coverage;
+  return { fetched: fetchedCount, added: inserted, inserted, updated, deleted, skipped, total, coverage };
+}
+
 async function runSinglePageTask(task){
   if(task.mode === 'SJTU_JWB'){
     const r = await runJwbTask(task);
@@ -837,10 +857,19 @@ async function runSinglePageTask(task){
         text = await fallbackFetchPage(url, console.log, console.warn);
       }
     } catch { text=''; }
-    const eventsParsed = await parseWithParser(text, parser, { jsonPaths: modeConfig.jsonPaths });
-    const uploadResult = await uploadWithSelectedServer(eventsParsed || [], calendarName, task.serverId);
-    notifyAll(formatStatsNotice(`任务 ${calendarName} (parser:${parser.name||parser.type}) 完成`, (eventsParsed||[]).length, uploadResult));
-    return { added: (eventsParsed||[]).length, total: uploadResult.total, direct: parser.type === 'json_mapping', ...uploadResult };
+    const parsedPayload = await parseWithParser(text, parser, { jsonPaths: modeConfig.jsonPaths, calendarName });
+    const eventsParsed = Array.isArray(parsedPayload?.events) ? parsedPayload.events : [];
+    const targetName = (parsedPayload?.calendarName || calendarName || task.calendarName || 'PAGE-PARSED');
+    const uploadResult = await uploadWithSelectedServer(
+      eventsParsed,
+      targetName,
+      task.serverId,
+      { icsText: parsedPayload?.icsText, rawIcsText: parsedPayload?.rawIcsText }
+    );
+    const summary = summarizeUploadResult(uploadResult, eventsParsed.length);
+    notifyAll(formatStatsNotice(`任务 ${targetName} (parser:${parser.name||parser.type}) 完成`, summary.fetched, uploadResult));   
+    await recordTaskStats(task.id, summary.added, summary.total);
+    return { calendarName: targetName, direct: parser.type === 'json_mapping', ...uploadResult, ...summary };
   }
   // No explicit parser: choose fetch by parseMode
   let text = '';
@@ -853,9 +882,12 @@ async function runSinglePageTask(task){
     const pseudoSettings = { pageParseJsonPaths: modeConfig.jsonPaths };
     const events = await tryParseJsonEvents(text, pseudoSettings) || [];
     if(events.length){
-    const info = await mergeUpload(calendarName || 'PAGE-PARSED', events);
-    notifyAll(formatStatsNotice(`任务 ${calendarName} (direct) 完成`, events.length, info));
-    return { added: events.length, total: info.total, direct:true, ...info };
+    const targetName = calendarName || task.calendarName || 'PAGE-PARSED';
+    const info = await mergeUpload(targetName, events);
+    const summary = summarizeUploadResult(info, events.length);
+    notifyAll(formatStatsNotice(`任务 ${targetName} (direct) 完成`, summary.fetched, info));
+    await recordTaskStats(task.id, summary.added, summary.total);
+    return { calendarName: targetName, direct:true, ...info, ...summary };
     }
     // direct 失败则尝试 LLM 兜底
   }
@@ -865,11 +897,19 @@ async function runSinglePageTask(task){
     const narrowed = narrowTextByJsonPaths(text, modeConfig.jsonPaths);
     if(narrowed) llmInput = narrowed;
   }
-  const eventsLLM = await parseTextViaLLM(llmInput);
-  const uploadResult2 = await uploadWithSelectedServer(eventsLLM, calendarName, task.serverId);
-  notifyAll(formatStatsNotice(`任务 ${calendarName} 完成`, eventsLLM.length, uploadResult2));
-  await recordTaskStats(task.id, eventsLLM.length, uploadResult2.total);
-  return { added: eventsLLM.length, total: uploadResult2.total, ...uploadResult2 };
+  const payloadLLM = await parseTextViaLLM(llmInput, calendarName);
+  const eventsLLM = Array.isArray(payloadLLM?.events) ? payloadLLM.events : [];
+  const targetName = (payloadLLM?.calendarName || calendarName || task.calendarName || 'PAGE-PARSED');
+  const uploadResult2 = await uploadWithSelectedServer(
+    eventsLLM,
+    targetName,
+    task.serverId,
+    { icsText: payloadLLM?.icsText, rawIcsText: payloadLLM?.rawIcsText }
+  );
+  const summary = summarizeUploadResult(uploadResult2, eventsLLM.length);
+  notifyAll(formatStatsNotice(`任务 ${targetName} 完成`, summary.fetched, uploadResult2));
+  await recordTaskStats(task.id, summary.added, summary.total);
+  return { calendarName: targetName, ...uploadResult2, ...summary };
 }
 
 async function runJwbTask(task){
@@ -898,9 +938,10 @@ async function runJwbTask(task){
   const coverage = !!task.modeConfig?.coverage;
   const meta = coverage ? { coverage:true, windowStart: start, windowEnd: end } : {};
   const result = await uploadWithSelectedServer(events, calendarName, task.serverId, meta);
-  notifyAll(formatStatsNotice(`交我办任务${coverage?'(覆盖)':''} ${calendarName}`, events.length, result));
-  await recordTaskStats(task.id, events.length, result.total);
-  return { added: events.length, total: result.total, jwb:true, coverage: coverage||false, ...result };
+  const summary = summarizeUploadResult(result, events.length);
+  notifyAll(formatStatsNotice(`交我办任务${coverage?'(覆盖)':''} ${calendarName}`, summary.fetched, result));
+  await recordTaskStats(task.id, summary.added, summary.total);
+  return { jwb:true, coverage: coverage||false, ...result, ...summary };
 }
 
 async function ensureJiaowobanParser(){
@@ -948,6 +989,13 @@ async function warmupVisit(warmUrl, opts){
 }
 
 async function uploadWithSelectedServer(events, calendarName, serverId, meta = {}){
+  const list = Array.isArray(events)
+    ? events
+    : (events && Array.isArray(events.events) ? events.events : []);
+  if(!Array.isArray(events)){
+    console.warn('[SJTU] uploadWithSelectedServer expected events array, received', typeof events, '-> using', list.length, 'items');
+  }
+  const nameStr = (typeof calendarName === 'string') ? calendarName.trim() : '';
   const settings = await loadSettings();
   // preference: task.serverId -> global selectedServerId -> fallback legacy radical
   const prefId = serverId || settings.selectedServerId;
@@ -956,12 +1004,12 @@ async function uploadWithSelectedServer(events, calendarName, serverId, meta = {
     try { server = await getServerById(prefId); } catch(_) {}
     if (server){
       // Prefer explicit calendarName; if absent, use server defaultCalendarName; fallback to PAGE-PARSED
-      const targetName = (calendarName && calendarName.trim()) || server.config?.defaultCalendarName || 'PAGE-PARSED';
-      const r = await mergeUploadWithServer(events, targetName, server, meta);
+      const targetName = nameStr || server.config?.defaultCalendarName || 'PAGE-PARSED';
+      const r = await mergeUploadWithServer(list, targetName, server, meta);
       return { ...r };
     }
   }
-  const info = await mergeUpload(calendarName || 'PAGE-PARSED', events);
+  const info = await mergeUpload(nameStr || 'PAGE-PARSED', list);
   return { ...info };
 }
 
@@ -1120,11 +1168,11 @@ function waitTabComplete(tabId, timeoutMs){
   });
 }
 
-async function parseTextViaLLM(rawText){
+async function parseTextViaLLM(rawText, calendarName){
   const parser = await getDefaultParser();
   if (!parser) throw new Error('未配置解析节点，请先在设置中添加解析节点');
-  const events = await parseWithParser(String(rawText||''), parser, {});
-  return events;
+  const payload = await parseWithParser(String(rawText||''), parser, { calendarName });
+  return payload;
 }
 
 // Fallback: direct fetch page HTML (no JS execution). We strip tags to approximate visible text.
@@ -1233,6 +1281,12 @@ async function runTaskWithLogging(task, triggerType, info){
     const result = await runSinglePageTask(task);
     const done = Date.now();
     const modeLabel = task.mode === 'SJTU_JWB' ? 'jwb' : (result.direct ? 'direct' : 'llm');
+    const fetchedCount = Number(result.fetched ?? result.sourceCount ?? 0) || 0;
+    const insertedCount = Number(result.inserted ?? result.added ?? 0) || 0;
+    const updatedCount = Number(result.updated ?? 0) || 0;
+    const deletedCount = Number(result.deleted ?? 0) || 0;
+    const skippedCount = Number(result.skipped ?? 0) || 0;
+    const totalCount = Number(result.total ?? 0) || 0;
     await appendTaskLog({
       ts: done,
       type: 'result',
@@ -1241,22 +1295,22 @@ async function runTaskWithLogging(task, triggerType, info){
       taskName: task.name || task.calendarName || task.id,
       durationMs: done-start,
       ok: true,
-      added: result.added||0,
-      total: result.total||0,
-      mode: modeLabel,
-      inserted: result.inserted||0,
-      updated: result.updated||0,
-      deleted: result.deleted||0,
-      skipped: result.skipped||0,
+      added: insertedCount,
+      total: totalCount,
+      mode: result.mode || modeLabel,
+      inserted: insertedCount,
+      updated: updatedCount,
+      deleted: deletedCount,
+      skipped: skippedCount,
       coverage: !!result.coverage,
-      sourceCount: result.added || 0
+      sourceCount: fetchedCount
     });
     // Persist last detailed stats for task card display
     try {
       const s = await loadSettings();
       const lastStats = Array.isArray(s.pageTaskLastStats)? s.pageTaskLastStats.slice(): [];
       const idx = lastStats.findIndex(x=> x.id === task.id);
-      const entry = { id: task.id, ts: done, fetched: result.added||0, inserted: result.inserted||0, updated: result.updated||0, deleted: result.deleted||0, skipped: result.skipped||0, coverage: !!result.coverage };
+      const entry = { id: task.id, ts: done, fetched: fetchedCount, inserted: insertedCount, updated: updatedCount, deleted: deletedCount, skipped: skippedCount, coverage: !!result.coverage };
       if(idx>=0) lastStats[idx] = entry; else lastStats.push(entry);
       await saveSettings({ pageTaskLastStats: lastStats });
     } catch(_){ /* ignore persist errors */ }
@@ -1265,7 +1319,9 @@ async function runTaskWithLogging(task, triggerType, info){
     return result;
   } catch(e){
     const done = Date.now();
-    await appendTaskLog({ ts: done, type: 'result', triggerType, taskId: task.id, taskName: task.name || task.calendarName || task.id, durationMs: done-start, ok: false, error: e.message });
+    const stackSnippet = e?.stack ? String(e.stack).split('\n').slice(0,6).join(' | ') : undefined;
+    console.error('[SJTU] page task failed', task.id, e);
+    await appendTaskLog({ ts: done, type: 'result', triggerType, taskId: task.id, taskName: task.name || task.calendarName || task.id, durationMs: done-start, ok: false, error: e.message, stack: stackSnippet });
     try { chrome.runtime.sendMessage({ type:'TASK_RUN_COMPLETED', taskId: task.id, error: e.message }).catch(()=>{}); } catch(_){ }
     throw e;
   }
