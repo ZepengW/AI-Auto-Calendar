@@ -1,6 +1,6 @@
 // Pluggable calendar server registry and unified upload
 // Types supported: 'radicale' (merge via ICS), 'google' (Google Calendar API)
-import { DEFAULTS, isoToICSTime, escapeICSText, loadSettings, expandRecurringEvents, getGoogleClientId } from './shared.js';
+import { DEFAULTS, isoToICSTime, escapeICSText, loadSettings, expandRecurringEvents, getGoogleClientId, unescapeICSText } from './shared.js';
 
 // ---------------- Storage ----------------
 export async function loadServers() {
@@ -105,11 +105,11 @@ function parseExistingICS(text){
         const key = keyPart.split(';')[0].toUpperCase();
         cur.rawProps[key] = value;
         if(key === 'UID') cur.uid = value;
-        if(key === 'SUMMARY') cur.title = value;
+        if(key === 'SUMMARY') cur.title = unescapeICSText(value);
         if(key === 'DTSTART') cur.startTime = parseICSTime(value.replace(/Z$/, ''));
         if(key === 'DTEND') cur.endTime = parseICSTime(value.replace(/Z$/, ''));
-        if(key === 'LOCATION') cur.location = value;
-        if(key === 'DESCRIPTION') cur.description = value;
+        if(key === 'LOCATION') cur.location = unescapeICSText(value);
+        if(key === 'DESCRIPTION') cur.description = unescapeICSText(value);
         if(key === 'RRULE') cur.rrule = value;
       }
     }
@@ -327,6 +327,24 @@ async function mergeUploadWithRadicale(events, calendarName, server, meta = {}){
   // Helpers for logical equality (decide skip vs update)
   function sameLogical(a,b){
     if(!a || !b) return false;
+    // If both sides expose raw ICS blocks, compare them after removing DTSTAMP lines.
+    // DTSTAMP is just metadata, and Radicale rewrites it on upload, so treating it as a
+    // diff would create noisy "updated" entries even when nothing meaningful changed.
+    function stripDtstamp(raw){
+      if(typeof raw !== 'string' || !raw) return '';
+      return raw
+        .replace(/\r\n/g, '\n')
+        .split('\n')
+        .filter((line)=> {
+          const trimmed = line.trim();
+          return trimmed && !/^DTSTAMP(?:;|:)/i.test(trimmed);
+        })
+        .join('\n')
+        .trim();
+    }
+    const rawA = stripDtstamp(a.rawICS);
+    const rawB = stripDtstamp(b.rawICS);
+    if(rawA && rawB && rawA === rawB) return true;
     const f = (v)=> (v||'').trim();
     const iso = (dt)=> (dt instanceof Date && !isNaN(dt)) ? dt.toISOString() : (dt? new Date(dt).toISOString(): '');
     const rrA = (a.rrule||'').trim().toUpperCase();
@@ -344,7 +362,9 @@ async function mergeUploadWithRadicale(events, calendarName, server, meta = {}){
       if(Array.isArray(ev?.alarms)){
         for(const al of ev.alarms){ const mins = Number(al.minutesBefore); if(Number.isFinite(mins) && mins>0) out.push(mins); }
       }
-      return out.sort((x,y)=>x-y);
+      const filtered = out.filter((v)=> Number.isFinite(v) && v>0);
+      const unique = Array.from(new Set(filtered));
+      return unique.sort((x,y)=>x-y);
     }
     const alarmsA = normAlarmsFromRaw(a);
     const alarmsB = normAlarmsFromRaw(b);
@@ -385,7 +405,7 @@ async function mergeUploadWithRadicale(events, calendarName, server, meta = {}){
       const newEv = { ...matched, ...ev };
       if(newEv.rawICS) delete newEv.rawICS;
       if(matched.uid && !newEv.uid) newEv.uid = matched.uid;
-      if(debugDiff){
+      const diffDetails = (()=>{
         const diffs = [];
         const cmpList = [
           ['title', matched.title, ev.title],
@@ -413,10 +433,19 @@ async function mergeUploadWithRadicale(events, calendarName, server, meta = {}){
           const bStr = bVal instanceof Date ? bVal.toISOString() : (bVal||'');
           if(aStr !== bStr){ diffs.push({ field, from:aStr, to:bStr }); }
         }
-        if(diffs.length){
-          console.log('[Radicale-DIFF]', calendarName, 'UID=', matched.uid||matched.id, diffs);
-        }
+        return diffs;
+      })();
+      if(debugDiff && diffDetails.length){
+        console.log('[Radicale-DIFF]', calendarName, 'UID=', matched.uid||matched.id, diffDetails);
       }
+      const diffFields = diffDetails.map(d=>d.field);
+      console.log('[Radicale-UPDATE]', {
+        calendar: calendarName,
+        uid: matched.uid || matched.id || ev.uid || ev.id || '',
+        matchType,
+        diffFields,
+        diffs: diffDetails,
+      });
       replacedExisting.set(matched, newEv);
       usedExisting.add(matched);
       updated++;

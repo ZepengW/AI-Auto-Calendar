@@ -143,7 +143,7 @@ export function escapeICSText(s) {
 export function unescapeICSText(s) {
   if (!s) return '';
   return String(s)
-    .replace(/\\n/g, '\n')
+    .replace(/\\n/gi, '\n')
     .replace(/\\,/g, ',')
     .replace(/\\;/g, ';')
     .replace(/\\\\/g, '\\');

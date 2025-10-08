@@ -821,6 +821,11 @@ function summarizeUploadResult(uploadResult = {}, fetchedCount = 0){
 }
 
 async function runSinglePageTask(task){
+  const stageLog = (stage, detail = {}) => {
+    try {
+      console.log('[SJTU][TaskStage]', { taskId: task.id, stage, calendar: task.calendarName || task.name || null, ...detail });
+    } catch(_){ /* ignore logging issues */ }
+  };
   if(task.mode === 'SJTU_JWB'){
     const r = await runJwbTask(task);
     await recordTaskStats(task.id, r.added, r.total);
@@ -853,12 +858,18 @@ async function runSinglePageTask(task){
       if (parser.type === 'json_mapping') {
         const r = await httpFetch(url);
         text = r.text || '';
+        stageLog('fetch', { url, parser: parser.type, mode: 'json-mapping', status: r.status, ok: r.ok, chars: text.length });
       } else {
         text = await fallbackFetchPage(url, console.log, console.warn);
+        stageLog('fetch', { url, parser: parser.type, mode: 'fallback-page', chars: text.length });
       }
-    } catch { text=''; }
+    } catch(err) {
+      stageLog('fetch', { url, parser: parser.type, error: err?.message || String(err) });
+      text='';
+    }
     const parsedPayload = await parseWithParser(text, parser, { jsonPaths: modeConfig.jsonPaths, calendarName });
     const eventsParsed = Array.isArray(parsedPayload?.events) ? parsedPayload.events : [];
+    stageLog('parse', { parser: parser.name || parser.type, events: eventsParsed.length, calendar: parsedPayload?.calendarName || calendarName || task.calendarName || null });
     const targetName = (parsedPayload?.calendarName || calendarName || task.calendarName || 'PAGE-PARSED');
     const uploadResult = await uploadWithSelectedServer(
       eventsParsed,
@@ -867,6 +878,15 @@ async function runSinglePageTask(task){
       { icsText: parsedPayload?.icsText, rawIcsText: parsedPayload?.rawIcsText }
     );
     const summary = summarizeUploadResult(uploadResult, eventsParsed.length);
+    stageLog('upload', {
+      calendar: targetName,
+      serverId: task.serverId || null,
+      inserted: uploadResult.inserted ?? summary.added ?? 0,
+      updated: uploadResult.updated ?? 0,
+      skipped: uploadResult.skipped ?? 0,
+      deleted: uploadResult.deleted ?? 0,
+      total: uploadResult.total ?? 0,
+    });
     notifyAll(formatStatsNotice(`任务 ${targetName} (parser:${parser.name||parser.type}) 完成`, summary.fetched, uploadResult));   
     await recordTaskStats(task.id, summary.added, summary.total);
     return { calendarName: targetName, direct: parser.type === 'json_mapping', ...uploadResult, ...summary };
@@ -874,17 +894,40 @@ async function runSinglePageTask(task){
   // No explicit parser: choose fetch by parseMode
   let text = '';
   if (modeConfig.parseMode === 'direct'){
-    try { const r = await httpFetch(url); text = r.text || ''; } catch { text=''; }
+    try {
+      const r = await httpFetch(url);
+      text = r.text || '';
+      stageLog('fetch', { url, mode: 'http-json', status: r.status, ok: r.ok, chars: text.length });
+    } catch(err) {
+      stageLog('fetch', { url, mode: 'http-json', error: err?.message || String(err) });
+      text='';
+    }
   } else {
-    try { text = await fallbackFetchPage(url, console.log, console.warn); } catch { text=''; }
+    try {
+      text = await fallbackFetchPage(url, console.log, console.warn);
+      stageLog('fetch', { url, mode: 'fallback-page', chars: text.length });
+    } catch(err) {
+      stageLog('fetch', { url, mode: 'fallback-page', error: err?.message || String(err) });
+      text='';
+    }
   }
   if(modeConfig.parseMode === 'direct'){
     const pseudoSettings = { pageParseJsonPaths: modeConfig.jsonPaths };
     const events = await tryParseJsonEvents(text, pseudoSettings) || [];
+    stageLog('parse', { mode: 'direct-json', events: events.length });
     if(events.length){
     const targetName = calendarName || task.calendarName || 'PAGE-PARSED';
     const info = await mergeUpload(targetName, events);
     const summary = summarizeUploadResult(info, events.length);
+    stageLog('upload', {
+      calendar: targetName,
+      serverId: task.serverId || null,
+      inserted: info.inserted ?? info.added ?? summary.added ?? 0,
+      updated: info.updated ?? 0,
+      skipped: info.skipped ?? 0,
+      deleted: info.deleted ?? 0,
+      total: info.total ?? 0,
+    });
     notifyAll(formatStatsNotice(`任务 ${targetName} (direct) 完成`, summary.fetched, info));
     await recordTaskStats(task.id, summary.added, summary.total);
     return { calendarName: targetName, direct:true, ...info, ...summary };
@@ -899,6 +942,7 @@ async function runSinglePageTask(task){
   }
   const payloadLLM = await parseTextViaLLM(llmInput, calendarName);
   const eventsLLM = Array.isArray(payloadLLM?.events) ? payloadLLM.events : [];
+  stageLog('parse', { mode: 'llm', events: eventsLLM.length, parser: 'default' });
   const targetName = (payloadLLM?.calendarName || calendarName || task.calendarName || 'PAGE-PARSED');
   const uploadResult2 = await uploadWithSelectedServer(
     eventsLLM,
@@ -907,12 +951,26 @@ async function runSinglePageTask(task){
     { icsText: payloadLLM?.icsText, rawIcsText: payloadLLM?.rawIcsText }
   );
   const summary = summarizeUploadResult(uploadResult2, eventsLLM.length);
+  stageLog('upload', {
+    calendar: targetName,
+    serverId: task.serverId || null,
+    inserted: uploadResult2.inserted ?? summary.added ?? 0,
+    updated: uploadResult2.updated ?? 0,
+    skipped: uploadResult2.skipped ?? 0,
+    deleted: uploadResult2.deleted ?? 0,
+    total: uploadResult2.total ?? 0,
+  });
   notifyAll(formatStatsNotice(`任务 ${targetName} 完成`, summary.fetched, uploadResult2));
   await recordTaskStats(task.id, summary.added, summary.total);
   return { calendarName: targetName, ...uploadResult2, ...summary };
 }
 
 async function runJwbTask(task){
+  const stageLog = (stage, detail = {}) => {
+    try {
+      console.log('[SJTU][TaskStage]', { taskId: task.id, stage, calendar: task.calendarName || null, ...detail });
+    } catch(_){ }
+  };
   const { calendarName } = task;
   const days = Math.max(1, Number(task.modeConfig?.windowDays)||14);
   // warmup visit to calendar UI first (silent) to refresh cookies
@@ -923,6 +981,7 @@ async function runJwbTask(task){
   const url = `https://calendar.sjtu.edu.cn/api/event/list?startDate=${formatDateForAPI(start)}&endDate=${formatDateForAPI(end)}&weekly=false&ids=`;
   await ensureHostPermissionForUrl(url);
   const resp = await httpFetch(url);
+  stageLog('fetch', { url, status: resp.status, ok: resp.ok, chars: (resp.text || '').length });
   if(!resp.ok) throw new Error('交我办事件获取失败 ' + resp.status);
   // Ensure jiaowoban parser exists (auto-create if missing)
   const parser = await ensureJiaowobanParser();
@@ -934,11 +993,22 @@ async function runJwbTask(task){
     throw new Error('交我办解析节点处理失败: ' + e.message);
   }
   const events = eventsPayload.events || [];
+  stageLog('parse', { parser: parser.name || parser.type, events: events.length, calendar: eventsPayload.calendarName || calendarName });
   if(!events.length) notifyAll(`交我办窗口 ${days} 天内无事件 (${calendarName})`);
   const coverage = !!task.modeConfig?.coverage;
   const meta = coverage ? { coverage:true, windowStart: start, windowEnd: end } : {};
   const result = await uploadWithSelectedServer(events, calendarName, task.serverId, meta);
   const summary = summarizeUploadResult(result, events.length);
+  stageLog('upload', {
+    calendar: calendarName,
+    serverId: task.serverId || null,
+    inserted: result.inserted ?? summary.added ?? 0,
+    updated: result.updated ?? 0,
+    skipped: result.skipped ?? 0,
+    deleted: result.deleted ?? 0,
+    total: result.total ?? 0,
+    coverage,
+  });
   notifyAll(formatStatsNotice(`交我办任务${coverage?'(覆盖)':''} ${calendarName}`, summary.fetched, result));
   await recordTaskStats(task.id, summary.added, summary.total);
   return { jwb:true, coverage: coverage||false, ...result, ...summary };
