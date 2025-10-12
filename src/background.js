@@ -720,12 +720,14 @@ async function ensureAllPageTaskAlarms(){
     const wantTimes = (t.useTimes === true) || (t.useTimes === undefined && t.scheduleType === 'times');
     if(wantInterval){
       const iv = Math.max(1, Number(t.intervalMinutes)||0);
-      if(!iv || !t.modeConfig?.url) continue;
+      const needsUrl = t.mode !== 'SJTU_JWB';
+      if(!iv || (needsUrl && !t.modeConfig?.url)) continue;
       chrome.alarms.create('PAGE_TASK_INTERVAL_'+t.id, { periodInMinutes: iv });
       console.log('[SJTU] created interval alarm for', t.id, 'every', iv, 'min');
     }
     if(wantTimes) {
-      if(!Array.isArray(t.times) || !t.times.length || !t.modeConfig?.url) continue;
+      const needsUrl = t.mode !== 'SJTU_JWB';
+      if(!Array.isArray(t.times) || !t.times.length || (needsUrl && !t.modeConfig?.url)) continue;
       t.times.forEach((tm, idx)=>{
         const when = computeNextTimePoint(tm);
         if(when) {

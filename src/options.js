@@ -399,7 +399,7 @@ function openTaskModal(task){
   els.task_name.value = task?.name || '';
   els.task_calendarName.value = task?.calendarName || task?.name || '';
   els.task_interval.value = task?.intervalMinutes || task?.interval || 60;
-  els.task_enabled.value = task?.enabled? 'true':'false';
+  els.task_enabled.value = task ? (task.enabled ? 'true' : 'false') : 'true';
   els.task_url.value = task?.modeConfig?.url || task?.url || '';
   els.task_mode.value = 'HTTP_GET_JSON';
   if(task?.mode === 'SJTU_JWB'){ els.task_mode.value = 'SJTU_JWB'; }
