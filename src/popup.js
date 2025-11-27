@@ -109,7 +109,7 @@ async function parseFreeText(){
   }
 }
 
-function buildICS(events, calendarName='LLM-Parsed'){
+function buildICS(events, calendarName='SJTU'){
   const now = new Date();
   const lines = [
     'BEGIN:VCALENDAR',
@@ -165,8 +165,8 @@ async function parseAndDownloadFreeText(){
     if(!resp?.ok) throw new Error(resp.error||'后台失败');
     const events = Array.isArray(resp.events) ? resp.events : [];
     if(!events.length){ status.textContent='未解析到事件'; return; }
-    const ics = buildICS(events, 'LLM-Parsed');
-    downloadText('LLM-Parsed.ics', ics);
+    const ics = buildICS(events, 'SJTU');
+    downloadText('SJTU.ics', ics);
     status.textContent = `已下载 ICS，事件 ${events.length}`;
   }catch(e){ status.textContent = '失败: ' + e.message; }
 }

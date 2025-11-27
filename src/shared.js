@@ -755,7 +755,7 @@ export function expandRecurringEvents(events = [], options = {}) {
 }
 
 export function buildICSCalendar(events, options = {}) {
-  const { calendarName = 'LLM-Parsed', prodId = DEFAULT_PRODID, timeZone = 'UTC' } = options;
+  const { calendarName = FALLBACK_CALENDAR_NAME, prodId = DEFAULT_PRODID, timeZone = 'UTC' } = options;
   const normalized = normalizeCalendarEvents(events);
   const now = new Date();
   const lines = [

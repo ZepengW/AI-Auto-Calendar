@@ -391,7 +391,10 @@ async function uploadSelected(){
   const idxs = collectSelected();
   if(!idxs.length){ setUploadStatus('未选择事件','error-box'); return; }
   try {
-    const picked = idxs.map(i => currentEvents[i]);
+    const picked = idxs
+      .map(i => currentEvents[i])
+      .filter(ev => ev && typeof ev === 'object');
+    if(!picked.length){ setUploadStatus('未找到要上传的事件','error-box'); return; }
     const toDate = (v)=>{
       if(v instanceof Date) return v;
       const llm = parseLLMTime(v); if(llm instanceof Date) return llm;
@@ -403,7 +406,14 @@ async function uploadSelected(){
     const normalized = picked.map(ev=>{
       const s = toDate(ev.startTime || ev.startTimeRaw);
       const e = toDate(ev.endTime || ev.endTimeRaw);
-      return { ...ev, startTime: s || ev.startTime || ev.startTimeRaw, endTime: e || ev.endTime || ev.endTimeRaw };
+      return {
+        ...ev,
+        title: (ev.title || '').trim(),
+        location: (ev.location || '').trim(),
+        description: ev.description ?? '',
+        startTime: s || ev.startTime || ev.startTimeRaw,
+        endTime: e || ev.endTime || ev.endTimeRaw
+      };
     });
     let serverId = (qs('serverSelect')?.value || '').trim();
     let targetServer = serverId ? getServerById(serverId) : null;
@@ -414,7 +424,9 @@ async function uploadSelected(){
       serverId = targetServer.id;
     }
     const inputCalendarName = (qs('calendarNameInput')?.value || '').trim();
-    const calendarName = resolveCalendarName(inputCalendarName || currentPayload.calendarName);
+    // 解析最终上传所用的日历名称（优先输入框，其次当前 payload，再退回服务器 / 默认名）
+    const calendarName = resolveCalendarName(inputCalendarName || currentPayload.calendarName || '');
+    // 使用最新编辑过的 normalized 事件重新构造 payload，确保不沿用旧的 currentPayload.events
     const payload = ensureCalendarPayload({ events: normalized }, { calendarName });
     const res = await chrome.runtime.sendMessage({ type:'UPLOAD_EVENTS', payload, serverId: serverId || undefined, calendarName: payload.calendarName });
     if(!res?.ok) throw new Error(res?.error || '上传失败');

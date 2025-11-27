@@ -67,7 +67,7 @@ function ensureCalendarFromContent(content, opts, snippetLabel = '输出片段')
   const plainUpper = plain.toUpperCase();
   if (plainUpper.includes('BEGIN:VEVENT')) {
     const body = plain;
-    const calendarName = opts?.calendarName || 'LLM-Parsed';
+    const calendarName = opts?.calendarName || undefined;
     const wrapped = [
       'BEGIN:VCALENDAR',
       'VERSION:2.0',
@@ -194,7 +194,7 @@ async function parseViaZhipuAgent(rawText, config, options) {
   const json = await resp.json();
   const content = json.choices?.[0]?.messages?.content?.msg;
   if (!content) throw new Error('LLM 返回空内容');
-  const calendarName = config.calendarName || options.calendarName || 'LLM-Parsed';
+  const calendarName = config.calendarName || options.calendarName;
   return ensureCalendarFromContent(content, { calendarName }, 'LLM 输出片段');
 }
 
@@ -255,7 +255,7 @@ async function parseViaChatGPTAgent(rawText, config, options){
   const json = await resp.json();
   const content = json.choices?.[0]?.message?.content;
   if(!content) throw new Error('返回空内容');
-  const calendarName = config.calendarName || options.calendarName || 'LLM-Parsed';
+  const calendarName = config.calendarName || options.calendarName;
   return ensureCalendarFromContent(content, { calendarName }, '输出片段');
 }
 
@@ -304,7 +304,7 @@ async function parseViaBailianAgent(rawText, config, options){
   // The content may appear as output.text or choices-like structure depending on app
   const content = json.output?.text || json.output || json.result || json.data || '';
   if(!content || typeof content !== 'string') throw new Error('Bailian 返回空内容');
-  const calendarName = config.calendarName || options.calendarName || 'LLM-Parsed';
+  const calendarName = config.calendarName || options.calendarName;
   return ensureCalendarFromContent(content, { calendarName }, '输出片段');
 }
 
